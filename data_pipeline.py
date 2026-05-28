@@ -116,10 +116,11 @@ def _load_contract_history(xls: pd.ExcelFile) -> pd.DataFrame:
     df["new_value"] = df["new_value"].where(df["new_value"].notna()).astype(str)
     df.loc[df["new_value"] == "nan", "new_value"] = None
 
-    # Parse numeric contract ID from name pattern "… -C{NNNNN}"
+    # Parse numeric contract ID from name pattern "… - C{NNNNN}"
+    # The actual separator is " - C" (space-dash-space), so allow optional whitespace
     df["contract_number"] = (
         df["contract_name"]
-        .str.extract(r"-C(\d+)\s*$", expand=False)
+        .str.extract(r"-\s*C(\d+)\s*$", expand=False)
         .astype("Int64")
     )
     non_parseable = df["contract_name"].notna() & df["contract_number"].isna()
