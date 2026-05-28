@@ -480,12 +480,19 @@ def build_standalone_html(df: pd.DataFrame) -> str:
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:system-ui,-apple-system,sans-serif;background:#f0f4f8;color:#1a202c;font-size:14px;line-height:1.5}
 .wrap{max-width:1280px;margin:0 auto;padding:0 16px 60px}
-header{background:#1e293b;color:#fff;padding:18px 24px;display:flex;align-items:center;justify-content:space-between;border-radius:0 0 10px 10px;margin-bottom:24px;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+header{background:#1e293b;color:#fff;padding:16px 24px;border-radius:0 0 10px 10px;margin-bottom:20px;box-shadow:0 2px 8px rgba(0,0,0,.25)}
 header h1{font-size:18px;font-weight:700;letter-spacing:.01em}
-.hdr-right{display:flex;gap:8px;align-items:center}
-.mode-group{display:flex;background:rgba(255,255,255,.12);border-radius:8px;padding:3px;gap:3px}
-.mode-btn{background:none;border:none;color:rgba(255,255,255,.65);padding:6px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;transition:.15s}
-.mode-btn.active{background:#fff;color:#1e293b}
+.layout{display:flex;gap:20px;align-items:flex-start}
+.sidebar{width:200px;flex-shrink:0;background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:18px 14px;position:sticky;top:16px}
+.main{flex:1;min-width:0;overflow:hidden}
+.sb-section{margin-bottom:16px}
+.sb-section:last-child{margin-bottom:0}
+.sb-lbl{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#64748b;margin-bottom:6px;display:block}
+.sb-toggle{display:flex;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden}
+.sb-btn{flex:1;background:none;border:none;padding:7px 4px;font-size:11px;font-weight:500;color:#64748b;cursor:pointer;transition:.15s;text-align:center}
+.sb-btn.active{background:#1e293b;color:#fff}
+.sb-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.sb-divider{border:none;border-top:1px solid #f1f5f9;margin:12px 0}
 .tabs{display:flex;border-bottom:2px solid #e2e8f0;margin-bottom:20px;gap:4px}
 .tab{background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-2px;padding:10px 22px;cursor:pointer;font-size:14px;font-weight:500;color:#64748b;transition:.15s}
 .tab.active{color:#2563eb;border-bottom-color:#2563eb}
@@ -597,7 +604,7 @@ function getPhaseVal(q,i){
 }
 
 function setObjectFilter(btn){
-  const grp=btn.closest('.chips');
+  const grp=btn.closest('.sb-chips,.chips');
   grp.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
   btn.classList.add('on');
   state.object=btn.dataset.v;
@@ -656,7 +663,8 @@ function heatTextColor(t){return t>0.55?'#fff':'#1e293b';}
 
 function renderHeatmap(allRows,u){
   const W=860,padL=20,padR=20,barW=W-padL-padR;
-  const barY=20,barH=58,H=200;
+  /* barY pushed down to leave room for above-bar labels */
+  const barY=72,barH=52,H=240;
   const avgs=allRows.map(r=>r.a!==null?r.a:0);
   const total=avgs.reduce((a,b)=>a+b,0)||1;
   const nonNull=allRows.map(r=>r.a).filter(x=>x!==null);
@@ -677,6 +685,24 @@ function renderHeatmap(allRows,u){
 
   let s=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block" font-family="system-ui,sans-serif">`;
 
+  /* ── alternating labels: even → above bar, odd → below bar ── */
+  allRows.forEach((r,i)=>{
+    const cx=(xs[i]+xs[i+1])/2;
+    const lbl=DEST_LABELS[i]+(i===14?' ⚠':'');
+    const isAbove=i%2===0;
+    if(isAbove){
+      /* tick up from bar top */
+      s+=`<line x1="${cx}" y1="${barY-2}" x2="${cx}" y2="${barY-10}" stroke="#cbd5e1" stroke-width="1"/>`;
+      /* label rotated -45°, anchored below the pivot so it reads up-left */
+      s+=`<text transform="translate(${cx},${barY-12}) rotate(-45)" text-anchor="start" font-size="10" fill="#374151" font-weight="500">${escHtml(lbl)}</text>`;
+    } else {
+      /* tick down from bar bottom */
+      s+=`<line x1="${cx}" y1="${barY+barH+2}" x2="${cx}" y2="${barY+barH+10}" stroke="#cbd5e1" stroke-width="1"/>`;
+      /* label rotated -45°, anchored so it reads down-left */
+      s+=`<text transform="translate(${cx},${barY+barH+12}) rotate(-45)" text-anchor="end" font-size="10" fill="#374151" font-weight="500">${escHtml(lbl)}</text>`;
+    }
+  });
+
   /* ── segments ── */
   allRows.forEach((r,i)=>{
     const x1=xs[i],x2=xs[i+1],sw=x2-x1;
@@ -685,47 +711,40 @@ function renderHeatmap(allRows,u){
     const tc=r.a!==null?heatTextColor(t):'#94a3b8';
     /* fill */
     s+=`<rect x="${x1}" y="${barY}" width="${sw}" height="${barH}" fill="${fill}"/>`;
-    /* phase-colour top strip (5px) */
-    s+=`<rect x="${x1}" y="${barY}" width="${sw}" height="5" fill="${OBJ_COLORS[i]}" opacity="0.55"/>`;
+    /* phase-colour top strip (4px) */
+    s+=`<rect x="${x1}" y="${barY}" width="${sw}" height="4" fill="${OBJ_COLORS[i]}" opacity="0.6"/>`;
     /* white divider */
     if(i>0)s+=`<line x1="${x1}" y1="${barY}" x2="${x1}" y2="${barY+barH}" stroke="#fff" stroke-width="1.5"/>`;
-    /* step number */
-    const fs=sw>22?13:10;
-    s+=`<text x="${(x1+x2)/2}" y="${barY+barH/2+(sw>36?1:5)}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="${tc}">${i+1}</text>`;
-    /* value — only if segment is wide enough to show without crowding */
-    if(sw>36)s+=`<text x="${(x1+x2)/2}" y="${barY+barH/2+15}" text-anchor="middle" font-size="9" fill="${tc}" opacity="0.9">${r.a!==null?fmt(r.a)+u:''}</text>`;
+    /* step number — larger font for readability */
+    const fs=sw>28?14:sw>16?11:9;
+    const numY=barY+barH/2+(sw>30?2:6);
+    s+=`<text x="${(x1+x2)/2}" y="${numY}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="${tc}">${i+1}</text>`;
+    /* value label inside segment only if wide enough */
+    if(sw>42)s+=`<text x="${(x1+x2)/2}" y="${barY+barH/2+16}" text-anchor="middle" font-size="9.5" fill="${tc}" opacity="0.9">${r.a!==null?fmt(r.a)+u:''}</text>`;
   });
 
   /* bar outline */
   s+=`<rect x="${padL}" y="${barY}" width="${barW}" height="${barH}" fill="none" stroke="#cbd5e1" stroke-width="1"/>`;
 
-  /* ── rotated step-name labels below bar ── */
-  /* warn on last pair */
-  allRows.forEach((r,i)=>{
-    const cx=(xs[i]+xs[i+1])/2;
-    const lbl=DEST_LABELS[i]+(i===14?' ⚠':'');
-    s+=`<text transform="translate(${cx},${barY+barH+6}) rotate(-48)" text-anchor="end" font-size="9.5" fill="#374151">${escHtml(lbl)}</text>`;
-  });
-
   /* ── bottom legend row ── */
-  const lgY=H-16;
+  const lgY=H-14;
   /* gradient swatch */
   const lgW=90,lgH=7,swatchSteps=18;
   for(let i=0;i<swatchSteps;i++){
     s+=`<rect x="${padL+i*(lgW/swatchSteps)}" y="${lgY}" width="${lgW/swatchSteps+0.5}" height="${lgH}" fill="${heatColor(i/(swatchSteps-1))}"/>`;
   }
   s+=`<rect x="${padL}" y="${lgY}" width="${lgW}" height="${lgH}" fill="none" stroke="#e2e8f0" stroke-width="0.5"/>`;
-  s+=`<text x="${padL}" y="${lgY-3}" font-size="8" fill="#94a3b8">Less time</text>`;
-  s+=`<text x="${padL+lgW}" y="${lgY-3}" text-anchor="end" font-size="8" fill="#94a3b8">More time</text>`;
+  s+=`<text x="${padL}" y="${lgY-3}" font-size="8.5" fill="#94a3b8">Less time</text>`;
+  s+=`<text x="${padL+lgW}" y="${lgY-3}" text-anchor="end" font-size="8.5" fill="#94a3b8">More time</text>`;
   /* phase legend (inline, right of gradient) */
   let plx=padL+lgW+24;
   phases.forEach(ph=>{
     s+=`<rect x="${plx}" y="${lgY}" width="${lgH+1}" height="${lgH}" fill="${ph.col}" rx="1"/>`;
-    s+=`<text x="${plx+lgH+4}" y="${lgY+lgH-1}" font-size="9" fill="#374151">${ph.lbl}</text>`;
-    plx+=135;
+    s+=`<text x="${plx+lgH+4}" y="${lgY+lgH-0.5}" font-size="9.5" fill="#374151">${ph.lbl}</text>`;
+    plx+=140;
   });
-  /* Day 0 / total (far right) */
-  s+=`<text x="${padL+barW}" y="${lgY+lgH}" text-anchor="end" font-size="9" fill="#94a3b8">Total avg: ${total>0?fmt(total)+u:'—'}</text>`;
+  /* total label (far right) */
+  s+=`<text x="${padL+barW}" y="${lgY+lgH}" text-anchor="end" font-size="9.5" fill="#94a3b8">Total avg: ${total>0?fmt(total)+u:'—'}</text>`;
 
   s+='</svg>';
   return s;
@@ -771,7 +790,7 @@ function setView(v){
   document.getElementById('tab-b').classList.toggle('active',v==='B');
 }
 function setFilter(key,btn){
-  const grp=btn.closest('.chips');
+  const grp=btn.closest('.sb-chips,.chips');
   grp.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
   btn.classList.add('on');state[key]=btn.dataset.v;renderViewA();
 }
@@ -862,69 +881,88 @@ renderViewA();
 
     body = (
         '<div class="wrap">\n'
-        '  <header>\n'
-        '    <h1>Order-to-Cash Velocity Dashboard</h1>\n'
-        '    <div class="hdr-right">\n'
-        '      <div class="mode-group">\n'
-        "        <button id=\"btn-cal\" class=\"mode-btn active\" onclick=\"setMode('cal')\">&#128197; Calendar</button>\n"
-        "        <button id=\"btn-biz\" class=\"mode-btn\" onclick=\"setMode('biz')\">&#128188; Business</button>\n"
+        '  <header><h1>Order-to-Cash Velocity Dashboard</h1></header>\n'
+        '  <div class="layout">\n'
+        # ── Sidebar ──────────────────────────────────────────────────────────
+        '    <div class="sidebar">\n'
+        '      <div class="sb-section">\n'
+        '        <span class="sb-lbl">Time Basis</span>\n'
+        '        <div class="sb-toggle">\n'
+        "          <button id=\"btn-cal\"  class=\"sb-btn active\" onclick=\"setMode('cal')\">&#128197; Cal</button>\n"
+        "          <button id=\"btn-biz\"  class=\"sb-btn\"        onclick=\"setMode('biz')\">&#128188; Biz</button>\n"
+        '        </div>\n'
         '      </div>\n'
-        '      <div class="mode-group">\n'
-        "        <button id=\"btn-days\"  class=\"mode-btn active\" onclick=\"setUnit('days')\">Days</button>\n"
-        "        <button id=\"btn-hours\" class=\"mode-btn\"        onclick=\"setUnit('hours')\">Hours</button>\n"
+        '      <div class="sb-section">\n'
+        '        <span class="sb-lbl">Unit</span>\n'
+        '        <div class="sb-toggle">\n'
+        "          <button id=\"btn-days\"  class=\"sb-btn active\" onclick=\"setUnit('days')\">Days</button>\n"
+        "          <button id=\"btn-hours\" class=\"sb-btn\"        onclick=\"setUnit('hours')\">Hours</button>\n"
+        '        </div>\n'
+        '      </div>\n'
+        '      <hr class="sb-divider">\n'
+        '      <div class="sb-section">\n'
+        '        <span class="sb-lbl">Object</span>\n'
+        '        <div class="sb-chips" id="chips-object">\n'
+        '          <button class="chip on" data-v="all"      onclick="setObjectFilter(this)">All</button>\n'
+        '          <button class="chip"    data-v="quote"    onclick="setObjectFilter(this)">Quote</button>\n'
+        '          <button class="chip"    data-v="docusign" onclick="setObjectFilter(this)">DocuSign</button>\n'
+        '          <button class="chip"    data-v="contract" onclick="setObjectFilter(this)">Contract</button>\n'
+        '          <button class="chip"    data-v="order"    onclick="setObjectFilter(this)">Order</button>\n'
+        '        </div>\n'
+        '      </div>\n'
+        '      <div class="sb-section">\n'
+        '        <span class="sb-lbl">Month</span>\n'
+        '        <div class="sb-chips" id="chips-month">\n'
+        '          <button class="chip on" data-v="all" onclick="setFilter(\'month\',this)">All</button>\n'
+        '        </div>\n'
+        '      </div>\n'
+        '      <div class="sb-section">\n'
+        '        <span class="sb-lbl">Rework</span>\n'
+        '        <div class="sb-chips" id="chips-rework">\n'
+        '          <button class="chip on" data-v="all"    onclick="setFilter(\'rework\',this)">All</button>\n'
+        '          <button class="chip"    data-v="rework" onclick="setFilter(\'rework\',this)">Rework</button>\n'
+        '          <button class="chip"    data-v="clean"  onclick="setFilter(\'rework\',this)">Clean</button>\n'
+        '        </div>\n'
+        '      </div>\n'
+        '      <div class="sb-section">\n'
+        '        <span class="sb-lbl">NSCT</span>\n'
+        '        <div class="sb-chips" id="chips-nsct">\n'
+        '          <button class="chip on" data-v="all"      onclick="setFilter(\'nsct\',this)">All</button>\n'
+        '          <button class="chip"    data-v="nsct"     onclick="setFilter(\'nsct\',this)">NSCT</button>\n'
+        '          <button class="chip"    data-v="non_nsct" onclick="setFilter(\'nsct\',this)">Non-NSCT</button>\n'
+        '        </div>\n'
+        '      </div>\n'
+        '      <div class="sb-section">\n'
+        '        <span class="sb-lbl">Outcome</span>\n'
+        '        <div class="sb-chips" id="chips-outcome">\n'
+        '          <button class="chip on" data-v="all"         onclick="setFilter(\'outcome\',this)">All</button>\n'
+        '          <button class="chip"    data-v="Accepted"    onclick="setFilter(\'outcome\',this)">Accepted</button>\n'
+        '          <button class="chip"    data-v="Rejected"    onclick="setFilter(\'outcome\',this)">Rejected</button>\n'
+        '          <button class="chip"    data-v="Denied"      onclick="setFilter(\'outcome\',this)">Denied</button>\n'
+        '          <button class="chip"    data-v="In Progress" onclick="setFilter(\'outcome\',this)">In Progress</button>\n'
+        '        </div>\n'
         '      </div>\n'
         '    </div>\n'
-        '  </header>\n'
-        '  <div class="tabs">\n'
-        "    <button id=\"tab-a\" class=\"tab active\" onclick=\"setView('A')\">View A &#8212; Aggregate Velocity</button>\n"
-        "    <button id=\"tab-b\" class=\"tab\"        onclick=\"setView('B')\">View B &#8212; Per-Quote Timeline</button>\n"
-        '  </div>\n'
-        '  <div id="view-a">\n'
-        '    <div class="filters">\n'
-        '      <div class="fg"><label>Object</label>\n'
-        '        <div class="chips" id="chips-object">'
-        '          <button class="chip on" data-v="all"      onclick="setObjectFilter(this)">All</button>'
-        '          <button class="chip"    data-v="quote"    onclick="setObjectFilter(this)">Quote</button>'
-        '          <button class="chip"    data-v="docusign" onclick="setObjectFilter(this)">DocuSign</button>'
-        '          <button class="chip"    data-v="contract" onclick="setObjectFilter(this)">Contract</button>'
-        '          <button class="chip"    data-v="order"    onclick="setObjectFilter(this)">Order</button>'
+        # ── Main content ──────────────────────────────────────────────────────
+        '    <div class="main">\n'
+        '      <div class="tabs">\n'
+        "        <button id=\"tab-a\" class=\"tab active\" onclick=\"setView('A')\">&#128202; Aggregate Velocity</button>\n"
+        "        <button id=\"tab-b\" class=\"tab\"        onclick=\"setView('B')\">&#128269; Per-Quote Timeline</button>\n"
+        '      </div>\n'
+        '      <div id="view-a">\n'
+        '        <div id="callout-rework" class="callout hidden"></div>\n'
+        '        <div class="tbl-wrap" id="tbl-a"></div>\n'
+        '        <div id="charts-a"></div>\n'
+        '        <div id="summary-a"></div>\n'
+        '      </div>\n'
+        '      <div id="view-b" class="hidden">\n'
+        '        <div class="search-box"><div class="search-row">\n'
+        '          <input id="si" type="text" placeholder="Quote Number (e.g. Q12345) or Opportunity ID" onkeydown="if(event.key===\'Enter\')doSearch()">\n'
+        '          <button onclick="doSearch()">Search</button>\n'
         '        </div></div>\n'
-        '      <div class="fg"><label>Month</label>\n'
-        '        <div class="chips" id="chips-month">'
-        '          <button class="chip on" data-v="all" onclick="setFilter(\'month\',this)">All</button>'
-        '        </div></div>\n'
-        '      <div class="fg"><label>Rework</label>\n'
-        '        <div class="chips" id="chips-rework">'
-        '          <button class="chip on" data-v="all"    onclick="setFilter(\'rework\',this)">All</button>'
-        '          <button class="chip"    data-v="rework" onclick="setFilter(\'rework\',this)">Rework Only</button>'
-        '          <button class="chip"    data-v="clean"  onclick="setFilter(\'rework\',this)">Clean Path</button>'
-        '        </div></div>\n'
-        '      <div class="fg"><label>NSCT</label>\n'
-        '        <div class="chips" id="chips-nsct">'
-        '          <button class="chip on" data-v="all"      onclick="setFilter(\'nsct\',this)">All</button>'
-        '          <button class="chip"    data-v="nsct"     onclick="setFilter(\'nsct\',this)">NSCT</button>'
-        '          <button class="chip"    data-v="non_nsct" onclick="setFilter(\'nsct\',this)">Non-NSCT</button>'
-        '        </div></div>\n'
-        '      <div class="fg"><label>Outcome</label>\n'
-        '        <div class="chips" id="chips-outcome">'
-        '          <button class="chip on" data-v="all"         onclick="setFilter(\'outcome\',this)">All</button>'
-        '          <button class="chip"    data-v="Accepted"    onclick="setFilter(\'outcome\',this)">Accepted</button>'
-        '          <button class="chip"    data-v="Rejected"    onclick="setFilter(\'outcome\',this)">Rejected</button>'
-        '          <button class="chip"    data-v="Denied"      onclick="setFilter(\'outcome\',this)">Denied</button>'
-        '          <button class="chip"    data-v="In Progress" onclick="setFilter(\'outcome\',this)">In Progress</button>'
-        '        </div></div>\n'
+        '        <div id="sr"></div>\n'
+        '      </div>\n'
         '    </div>\n'
-        '    <div id="callout-rework" class="callout hidden"></div>\n'
-        '    <div class="tbl-wrap" id="tbl-a"></div>\n'
-        '    <div id="charts-a"></div>\n'
-        '    <div id="summary-a"></div>\n'
-        '  </div>\n'
-        '  <div id="view-b" class="hidden">\n'
-        '    <div class="search-box"><div class="search-row">\n'
-        '      <input id="si" type="text" placeholder="Quote Number (e.g. Q12345) or Opportunity ID" onkeydown="if(event.key===\'Enter\')doSearch()">\n'
-        '      <button onclick="doSearch()">Search</button>\n'
-        '    </div></div>\n'
-        '    <div id="sr"></div>\n'
         '  </div>\n'
         '</div>\n'
     )
