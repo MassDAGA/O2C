@@ -50,6 +50,17 @@ PAIR_LABELS = [
     f"{STEP_LABELS[i]} → {STEP_LABELS[i + 1]}" for i in range(15)
 ]
 
+# ── Phase spans (end-to-end summary) ──────────────────────────────────────────
+# (start_step_idx, end_step_idx) — 0-based into the 16 steps.
+_PHASE_EP = [(0, 8), (8, 11), (11, 12), (12, 15), (0, 15)]
+PHASE_LABELS = [
+    "Quote Phase (Created → Accepted)",
+    "DocuSign Phase (Accepted → Fully Executed)",
+    "Contract Phase (Executed → Contract Activated)",
+    "Order Phase (Contract → Deployed)",
+    "Full Cycle (Created → Deployed)",
+]
+
 # ── US holiday dates for business-day calculation ─────────────────────────────
 
 _us_hols = holidays.US(years=range(2024, 2030))
@@ -373,6 +384,20 @@ def _compute_deltas(qt: pd.DataFrame) -> pd.DataFrame:
     return qt
 
 
+def _compute_phases(qt: pd.DataFrame) -> pd.DataFrame:
+    """Add phase-span columns phase_cal_{k} (hours) / phase_biz_{k} (days), k=0..4.
+
+    Computed from the phase endpoints in _PHASE_EP — used by both the HTML
+    export and the Streamlit summary so the two stay in lock-step.
+    """
+    for k, (s_idx, e_idx) in enumerate(_PHASE_EP):
+        start = qt[f"s{s_idx + 1:02d}"]
+        end   = qt[f"s{e_idx + 1:02d}"]
+        qt[f"phase_cal_{k}"] = (end - start).dt.total_seconds() / 3600
+        qt[f"phase_biz_{k}"] = _biz_deltas(start, end)
+    return qt
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
 @_cache
@@ -395,6 +420,7 @@ def build_velocity_table(file_bytes: bytes) -> pd.DataFrame:
     qt = _join_docusign(qt, ds)
     qt = _compute_flags(qt, qh)
     qt = _compute_deltas(qt)
+    qt = _compute_phases(qt)
 
     return qt.reset_index(drop=True)
 
@@ -424,26 +450,15 @@ def _serialize_quotes(df: pd.DataFrame) -> str:
         opp  = row.get("opportunity_id")
         rs   = row.get("rework_stage")
 
-        # ── Phase spans: Quote(s01→s09), DocuSign(s09→s12), Contract(s12→s13),
-        #                 Order(s13→s16), Full(s01→s16)  ─────────────────────
-        _phase_ep = [(0, 8), (8, 11), (11, 12), (12, 15), (0, 15)]
+        # ── Phase spans (precomputed in _compute_phases): Quote, DocuSign,
+        #    Contract, Order, Full — read straight from columns ───────────────
         phase_cal_v: list = []
         phase_biz_v: list = []
-        for s_idx, e_idx in _phase_ep:
-            ts_s = row.get(f"s{s_idx + 1:02d}")
-            ts_e = row.get(f"s{e_idx + 1:02d}")
-            if pd.notna(ts_s) and pd.notna(ts_e):
-                ts_s_t = pd.Timestamp(ts_s)
-                ts_e_t = pd.Timestamp(ts_e)
-                phase_cal_v.append((ts_e_t - ts_s_t).total_seconds() / 3600)
-                phase_biz_v.append(float(np.busday_count(
-                    np.datetime64(ts_s_t.date(), "D"),
-                    np.datetime64(ts_e_t.date(), "D"),
-                    holidays=US_HOLIDAY_DATES,
-                )))
-            else:
-                phase_cal_v.append(None)
-                phase_biz_v.append(None)
+        for k in range(len(_PHASE_EP)):
+            c = row.get(f"phase_cal_{k}")
+            b = row.get(f"phase_biz_{k}")
+            phase_cal_v.append(None if (c is None or (isinstance(c, float) and math.isnan(c))) else float(c))
+            phase_biz_v.append(None if (b is None or (isinstance(b, float) and math.isnan(b))) else float(b))
 
         records.append({
             "quote_id":         str(row.get("quote_id", "")),
