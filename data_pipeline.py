@@ -614,27 +614,52 @@ function setObjectFilter(btn){
 
 function renderSummary(filtered){
   const u=unitSuffix(),un=unitName();
+  /* compute stats for each of the 4 base phases (indices 0–3) */
+  const pd=[0,1,2,3].map(function(i){
+    const vals=filtered.map(function(q){return getPhaseVal(q,i);}).filter(function(x){return x!==null;});
+    return{lbl:PHASE_LABELS[i],a:avg(vals),md:med(vals),n:vals.length};
+  });
+
+  function phaseRow(d,style){
+    return'<tr'+(style?' style="'+style+'"':'')+'>'
+      +'<td class="pair">'+escHtml(d.lbl)+'</td>'
+      +'<td class="'+(d.a===null?'muted':'num')+'">'+fmt(d.a)+'</td>'
+      +'<td class="'+(d.md===null?'muted':'num')+'">'+fmt(d.md)+'</td>'
+      +'<td class="num">'+d.n+'</td></tr>';
+  }
+  function sumRow(lbl,phaseIdxs,style){
+    /* Avg = sum of individual phase avgs; Median / n not meaningful for a sum */
+    const parts=phaseIdxs.map(function(i){return pd[i].a;});
+    const a=parts.every(function(v){return v!==null;})?parts.reduce(function(s,v){return s+v;},0):null;
+    return'<tr style="'+(style||'')+'border-top:2px solid #e2e8f0;font-weight:600">'
+      +'<td class="pair">'+escHtml(lbl)+'</td>'
+      +'<td class="'+(a===null?'muted':'num')+'">'+fmt(a)+'</td>'
+      +'<td class="muted">—</td>'
+      +'<td class="muted">—</td></tr>';
+  }
+
   let html='<div class="summary"><div class="summary-hdr">End-to-End Summary — '+un+'</div>'
     +'<table class="vtbl"><thead><tr><th>Phase</th><th class="r">Avg ('+un+')</th>'
     +'<th class="r">Median</th><th class="r">n</th></tr></thead><tbody>';
-  PHASE_LABELS.forEach(function(lbl,i){
-    const vals=filtered.map(function(q){return getPhaseVal(q,i);}).filter(function(x){return x!==null;});
-    const a=avg(vals),md=med(vals),n=vals.length;
-    const sep=i===4?' style="border-top:2px solid #e2e8f0;font-weight:600"':'';
-    html+='<tr'+sep+'>'
-      +'<td class="pair">'+escHtml(lbl)+'</td>'
-      +'<td class="'+(a===null?'muted':'num')+'">'+fmt(a)+'</td>'
-      +'<td class="'+(md===null?'muted':'num')+'">'+fmt(md)+'</td>'
-      +'<td class="num">'+n+'</td></tr>';
-  });
+  /* individual phases */
+  html+=phaseRow(pd[0]);
+  html+=phaseRow(pd[1]);
+  html+=phaseRow(pd[2]);
+  /* subtotal: quote creation → contract activated (sum of phases 0+1+2) */
+  html+=sumRow('Created → Contract Activated (subtotal)',[0,1,2],'background:#f8fafc;');
+  /* order phase */
+  html+=phaseRow(pd[3]);
+  /* full cycle: sum of all 4 phase avgs */
+  html+=sumRow('Full Cycle — Created → Deployed',[0,1,2,3],'');
   html+='</tbody></table></div>';
   document.getElementById('summary-a').innerHTML=html;
 }
 
 /* ── Chart rendering ─────────────────────────────────────────────────────── */
 function renderBarChart(allRows,u){
-  const LW=210,BW=440,VW=70,TW=LW+BW+VW;
-  const rowH=26,gap=3,padT=14,padB=10;
+  /* wider label area so full pair names fit without truncation */
+  const LW=300,BW=500,VW=80,TW=LW+BW+VW;
+  const rowH=28,gap=3,padT=14,padB=10;
   const H=padT+15*(rowH+gap)+padB;
   const avgs=allRows.map(r=>r.a);
   const maxV=Math.max(...avgs.filter(x=>x!==null),0.001);
@@ -643,11 +668,14 @@ function renderBarChart(allRows,u){
     const y=padT+i*(rowH+gap);
     const bw=r.a!==null?(r.a/maxV)*BW:0;
     const col=OBJ_COLORS[r.pairIdx];
-    const lbl=r.lbl.length>30?r.lbl.substring(0,28)+'…':r.lbl;
     const warn=r.pairIdx===14?' ⚠':'';
+    /* row background */
     s+=`<rect x="0" y="${y}" width="${TW}" height="${rowH}" fill="${i%2===0?'#f8fafc':'#fff'}"/>`;
-    s+=`<text x="${LW-8}" y="${y+rowH/2+4}" text-anchor="end" font-size="11" fill="#374151">${escHtml(lbl)}${warn}</text>`;
-    if(bw>0)s+=`<rect x="${LW}" y="${y+5}" width="${bw}" height="${rowH-10}" fill="${col}" rx="3" opacity="0.85"/>`;
+    /* full label — no truncation; SVG clips via viewBox if somehow too long */
+    s+=`<text x="${LW-10}" y="${y+rowH/2+4}" text-anchor="end" font-size="10" fill="#374151">${escHtml(r.lbl)}${warn}</text>`;
+    /* bar */
+    if(bw>0)s+=`<rect x="${LW}" y="${y+6}" width="${bw}" height="${rowH-12}" fill="${col}" rx="3" opacity="0.85"/>`;
+    /* value */
     s+=`<text x="${LW+bw+6}" y="${y+rowH/2+4}" font-size="11" fill="${r.a!==null?'#1e293b':'#94a3b8'}" font-weight="600">${r.a!==null?fmt(r.a)+u:'—'}</text>`;
   });
   s+='</svg>';
@@ -663,9 +691,10 @@ function heatColor(t){
 function heatTextColor(t){return t>0.55?'#fff':'#1e293b';}
 
 function renderHeatmap(allRows,u){
+  /* Compact proportional bar — no external labels.
+     Each segment shows % of total; hover reveals step name + value via SVG <title>. */
   const W=860,padL=20,padR=20,barW=W-padL-padR;
-  /* barY pushed down to leave room for above-bar labels */
-  const barY=72,barH=52,H=240;
+  const barY=14,barH=68,H=112;
   const avgs=allRows.map(r=>r.a!==null?r.a:0);
   const total=avgs.reduce((a,b)=>a+b,0)||1;
   const nonNull=allRows.map(r=>r.a).filter(x=>x!==null);
@@ -673,7 +702,6 @@ function renderHeatmap(allRows,u){
   const maxV=nonNull.length?Math.max(...nonNull):1;
   const range=maxV-minV||1;
 
-  /* cumulative x per segment boundary */
   const xs=[padL];
   avgs.forEach(v=>xs.push(xs[xs.length-1]+(v/total)*barW));
 
@@ -684,68 +712,52 @@ function renderHeatmap(allRows,u){
     {s:12,e:15,col:'#059669',lbl:'Order (13–15)'}
   ];
 
-  let s=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block" font-family="system-ui,sans-serif">`;
+  let s=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block;cursor:default" font-family="system-ui,sans-serif">`;
 
-  /* ── alternating labels: even → above bar, odd → below bar ── */
-  allRows.forEach((r,i)=>{
-    const cx=(xs[i]+xs[i+1])/2;
-    const lbl=DEST_LABELS[i]+(i===14?' ⚠':'');
-    const isAbove=i%2===0;
-    if(isAbove){
-      /* tick up from bar top */
-      s+=`<line x1="${cx}" y1="${barY-2}" x2="${cx}" y2="${barY-10}" stroke="#cbd5e1" stroke-width="1"/>`;
-      /* label rotated -45°, anchored below the pivot so it reads up-left */
-      s+=`<text transform="translate(${cx},${barY-12}) rotate(-45)" text-anchor="start" font-size="10" fill="#374151" font-weight="500">${escHtml(lbl)}</text>`;
-    } else {
-      /* tick down from bar bottom */
-      s+=`<line x1="${cx}" y1="${barY+barH+2}" x2="${cx}" y2="${barY+barH+10}" stroke="#cbd5e1" stroke-width="1"/>`;
-      /* label rotated -45°, anchored so it reads down-left */
-      s+=`<text transform="translate(${cx},${barY+barH+12}) rotate(-45)" text-anchor="end" font-size="10" fill="#374151" font-weight="500">${escHtml(lbl)}</text>`;
-    }
-  });
-
-  /* ── segments ── */
+  /* ── segments — each wrapped in <g> with <title> for hover tooltip ── */
   allRows.forEach((r,i)=>{
     const x1=xs[i],x2=xs[i+1],sw=x2-x1;
     const t=r.a!==null?(r.a-minV)/range:0;
     const fill=r.a!==null?heatColor(t):'#f1f5f9';
     const tc=r.a!==null?heatTextColor(t):'#94a3b8';
-    /* fill */
+    const pct=r.a!==null?((r.a/total)*100).toFixed(1):'0.0';
+    const warn=i===14?' ⚠':'';
+    const tipLbl=DEST_LABELS[i]+warn;
+    const tipVal=r.a!==null?fmt(r.a)+u+' ('+pct+'%)':'no data';
+    /* tooltip: browser shows this on hover */
+    s+=`<g><title>Pair ${i+1}: ${tipLbl} — ${tipVal}</title>`;
     s+=`<rect x="${x1}" y="${barY}" width="${sw}" height="${barH}" fill="${fill}"/>`;
-    /* phase-colour top strip (4px) */
-    s+=`<rect x="${x1}" y="${barY}" width="${sw}" height="4" fill="${OBJ_COLORS[i]}" opacity="0.6"/>`;
+    /* phase-colour top strip */
+    s+=`<rect x="${x1}" y="${barY}" width="${sw}" height="4" fill="${OBJ_COLORS[i]}" opacity="0.65"/>`;
     /* white divider */
     if(i>0)s+=`<line x1="${x1}" y1="${barY}" x2="${x1}" y2="${barY+barH}" stroke="#fff" stroke-width="1.5"/>`;
-    /* step number — larger font for readability */
-    const fs=sw>28?14:sw>16?11:9;
-    const numY=barY+barH/2+(sw>30?2:6);
-    s+=`<text x="${(x1+x2)/2}" y="${numY}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="${tc}">${i+1}</text>`;
-    /* value label inside segment only if wide enough */
-    if(sw>42)s+=`<text x="${(x1+x2)/2}" y="${barY+barH/2+16}" text-anchor="middle" font-size="9.5" fill="${tc}" opacity="0.9">${r.a!==null?fmt(r.a)+u:''}</text>`;
+    /* step number (always shown) */
+    const numFs=sw>26?13:sw>14?10:8;
+    s+=`<text x="${(x1+x2)/2}" y="${barY+barH/2+1}" text-anchor="middle" font-size="${numFs}" font-weight="700" fill="${tc}">${i+1}</text>`;
+    /* percentage inside segment — only if wide enough to read */
+    if(sw>46)s+=`<text x="${(x1+x2)/2}" y="${barY+barH/2+15}" text-anchor="middle" font-size="9" fill="${tc}" opacity="0.9">${pct}%</text>`;
+    s+=`</g>`;
   });
 
   /* bar outline */
   s+=`<rect x="${padL}" y="${barY}" width="${barW}" height="${barH}" fill="none" stroke="#cbd5e1" stroke-width="1"/>`;
 
-  /* ── bottom legend row ── */
-  const lgY=H-14;
-  /* gradient swatch */
-  const lgW=90,lgH=7,swatchSteps=18;
+  /* ── legend row ── */
+  const lgY=H-12;
+  const lgW=80,lgH=6,swatchSteps=16;
   for(let i=0;i<swatchSteps;i++){
     s+=`<rect x="${padL+i*(lgW/swatchSteps)}" y="${lgY}" width="${lgW/swatchSteps+0.5}" height="${lgH}" fill="${heatColor(i/(swatchSteps-1))}"/>`;
   }
   s+=`<rect x="${padL}" y="${lgY}" width="${lgW}" height="${lgH}" fill="none" stroke="#e2e8f0" stroke-width="0.5"/>`;
-  s+=`<text x="${padL}" y="${lgY-3}" font-size="8.5" fill="#94a3b8">Less time</text>`;
-  s+=`<text x="${padL+lgW}" y="${lgY-3}" text-anchor="end" font-size="8.5" fill="#94a3b8">More time</text>`;
-  /* phase legend (inline, right of gradient) */
-  let plx=padL+lgW+24;
+  s+=`<text x="${padL}" y="${lgY-3}" font-size="8" fill="#94a3b8">Less</text>`;
+  s+=`<text x="${padL+lgW}" y="${lgY-3}" text-anchor="end" font-size="8" fill="#94a3b8">More</text>`;
+  let plx=padL+lgW+20;
   phases.forEach(ph=>{
     s+=`<rect x="${plx}" y="${lgY}" width="${lgH+1}" height="${lgH}" fill="${ph.col}" rx="1"/>`;
-    s+=`<text x="${plx+lgH+4}" y="${lgY+lgH-0.5}" font-size="9.5" fill="#374151">${ph.lbl}</text>`;
-    plx+=140;
+    s+=`<text x="${plx+lgH+4}" y="${lgY+lgH}" font-size="9" fill="#374151">${ph.lbl}</text>`;
+    plx+=130;
   });
-  /* total label (far right) */
-  s+=`<text x="${padL+barW}" y="${lgY+lgH}" text-anchor="end" font-size="9.5" fill="#94a3b8">Total avg: ${total>0?fmt(total)+u:'—'}</text>`;
+  s+=`<text x="${padL+barW}" y="${lgY+lgH}" text-anchor="end" font-size="9" fill="#94a3b8">Total: ${total>0?fmt(total)+u:'—'} avg</text>`;
 
   s+='</svg>';
   return s;
@@ -755,7 +767,7 @@ function renderCharts(allRows,u){
   document.getElementById('charts-a').innerHTML=
     '<div class="chart-card"><div class="chart-hdr">Avg Time per Step Pair — '+unitName()+'</div>'
     +'<div class="chart-body">'+renderBarChart(allRows,u)+'</div></div>'
-    +'<div class="chart-card"><div class="chart-hdr">Where Time Is Spent — Proportional Heatmap</div>'
+    +'<div class="chart-card"><div class="chart-hdr">Time Distribution — % of Avg Cycle (hover each segment for step name &amp; value)</div>'
     +'<div class="chart-body">'+renderHeatmap(allRows,u)+'</div></div>';
 }
 
