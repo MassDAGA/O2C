@@ -552,6 +552,9 @@ header h1{font-size:18px;font-weight:700;letter-spacing:.01em}
 .hidden{display:none!important}
 .summary{background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-top:20px;overflow:hidden}
 .summary-hdr{background:#1e293b;color:#94a3b8;padding:10px 16px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.chart-card{background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-top:20px;overflow:hidden}
+.chart-hdr{background:#1e293b;color:#94a3b8;padding:10px 16px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
+.chart-body{padding:16px 12px 12px}
 """
 
     js = r"""
@@ -559,6 +562,9 @@ const STEP_LABELS=["Quote Created","TechReview","TechApproved","CommercialReview
 const PAIR_LABELS=["Quote Created → TechReview","TechReview → TechApproved","TechApproved → CommercialReview","CommercialReview → Commercial Approved","Commercial Approved → NSCT Review","NSCT Review → Fully Approved","Fully Approved → Presented","Presented → Accepted","Accepted → Signature Sent to Customer","Signature Sent to Customer → Customer Signed","Customer Signed → Fully Executed","Fully Executed → Contract Activated","Contract Activated → Order Activated","Order Activated → Awaiting Install","Awaiting Install → Deployment Closed"];
 const OBJECT_PAIRS={all:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14],quote:[0,1,2,3,4,5,6,7],docusign:[8,9,10],contract:[11],order:[12,13,14]};
 const PHASE_LABELS=['Quote Phase (Created → Accepted)','DocuSign Phase (Accepted → Fully Executed)','Contract Phase (Executed → Contract Activated)','Order Phase (Contract → Deployed)','Full Cycle (Created → Deployed)'];
+/* object color palettes — indexed by pair (0-14) and step (0-15) */
+const OBJ_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
+const STEP_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
 
 const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all',object:'all'};
 
@@ -613,6 +619,78 @@ function renderSummary(filtered){
   });
   html+='</tbody></table></div>';
   document.getElementById('summary-a').innerHTML=html;
+}
+
+/* ── Chart rendering ─────────────────────────────────────────────────────── */
+function renderBarChart(allRows,u){
+  const LW=210,BW=440,VW=70,TW=LW+BW+VW;
+  const rowH=26,gap=3,padT=14,padB=10;
+  const H=padT+15*(rowH+gap)+padB;
+  const avgs=allRows.map(r=>r.a);
+  const maxV=Math.max(...avgs.filter(x=>x!==null),0.001);
+  let s=`<svg viewBox="0 0 ${TW} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block" font-family="system-ui,sans-serif">`;
+  allRows.forEach((r,i)=>{
+    const y=padT+i*(rowH+gap);
+    const bw=r.a!==null?(r.a/maxV)*BW:0;
+    const col=OBJ_COLORS[r.pairIdx];
+    const lbl=r.lbl.length>30?r.lbl.substring(0,28)+'…':r.lbl;
+    const warn=r.pairIdx===14?' ⚠':'';
+    s+=`<rect x="0" y="${y}" width="${TW}" height="${rowH}" fill="${i%2===0?'#f8fafc':'#fff'}"/>`;
+    s+=`<text x="${LW-8}" y="${y+rowH/2+4}" text-anchor="end" font-size="11" fill="#374151">${escHtml(lbl)}${warn}</text>`;
+    if(bw>0)s+=`<rect x="${LW}" y="${y+5}" width="${bw}" height="${rowH-10}" fill="${col}" rx="3" opacity="0.85"/>`;
+    s+=`<text x="${LW+bw+6}" y="${y+rowH/2+4}" font-size="11" fill="${r.a!==null?'#1e293b':'#94a3b8'}" font-weight="600">${r.a!==null?fmt(r.a)+u:'—'}</text>`;
+  });
+  s+='</svg>';
+  return s;
+}
+
+function renderTimeline(allRows,u){
+  const W=900,padL=40,padR=40,axisW=W-padL-padR;
+  const H=185,axisY=105;
+  const avgs=allRows.map(r=>r.a);
+  /* cumulative position for each of the 16 steps */
+  const pos=[0];
+  for(let i=0;i<15;i++)pos.push(pos[i]+(avgs[i]!==null?avgs[i]:0));
+  const total=pos[15]||1;
+  const xp=i=>padL+(pos[i]/total)*axisW;
+  const phases=[
+    {s:0,e:8,col:'#3b82f6',lbl:'Quote'},
+    {s:8,e:11,col:'#7c3aed',lbl:'DocuSign'},
+    {s:11,e:12,col:'#0891b2',lbl:'Contract'},
+    {s:12,e:15,col:'#059669',lbl:'Order'}
+  ];
+  let s=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block" font-family="system-ui,sans-serif">`;
+  /* phase bands */
+  phases.forEach(ph=>{
+    const x1=xp(ph.s),x2=xp(ph.e);
+    s+=`<rect x="${x1}" y="30" width="${x2-x1}" height="${H-58}" fill="${ph.col}" opacity="0.07" rx="4"/>`;
+    s+=`<text x="${(x1+x2)/2}" y="22" text-anchor="middle" font-size="10" fill="${ph.col}" font-weight="700">${ph.lbl}</text>`;
+  });
+  /* axis */
+  s+=`<line x1="${padL}" y1="${axisY}" x2="${padL+axisW}" y2="${axisY}" stroke="#e2e8f0" stroke-width="2"/>`;
+  /* step markers */
+  STEP_LABELS.forEach((_,i)=>{
+    const xi=xp(i);
+    const c=avgs[i-1]!==null||i===0?STEP_COLORS[i]:'#cbd5e1';
+    const above=i%2===0;
+    s+=`<line x1="${xi}" y1="${axisY-5}" x2="${xi}" y2="${axisY+5}" stroke="${c}" stroke-width="1.5"/>`;
+    s+=`<circle cx="${xi}" cy="${axisY}" r="5" fill="${c}" stroke="#fff" stroke-width="1.5"/>`;
+    const warn=i===15?' ⚠':'';
+    s+=`<text x="${xi}" y="${axisY+(above?-13:19)}" text-anchor="middle" font-size="9" fill="${c}" font-weight="700">${i+1}${warn}</text>`;
+  });
+  /* start / end labels */
+  s+=`<text x="${padL}" y="${axisY+38}" text-anchor="middle" font-size="10" fill="#64748b">Day 0</text>`;
+  s+=`<text x="${padL+axisW}" y="${axisY+38}" text-anchor="middle" font-size="10" fill="#64748b">${pos[15]>0?fmt(pos[15])+u:'—'}</text>`;
+  s+='</svg>';
+  return s;
+}
+
+function renderCharts(allRows,u){
+  document.getElementById('charts-a').innerHTML=
+    '<div class="chart-card"><div class="chart-hdr">Avg Time per Step Pair — '+unitName()+'</div>'
+    +'<div class="chart-body">'+renderBarChart(allRows,u)+'</div></div>'
+    +'<div class="chart-card"><div class="chart-hdr">Cumulative Timeline — Day 0 → Avg Deployment</div>'
+    +'<div class="chart-body">'+renderTimeline(allRows,u)+'</div></div>';
 }
 
 function applyFilters(qs,s){
@@ -689,6 +767,7 @@ function renderViewA(){
   });
   html+='</tbody></table>';
   document.getElementById('tbl-a').innerHTML=html;
+  renderCharts(allRows,unitSuffix());   // always full 15 pairs, regardless of object filter
   renderSummary(filtered);
 }
 
@@ -791,6 +870,7 @@ renderViewA();
         '    </div>\n'
         '    <div id="callout-rework" class="callout hidden"></div>\n'
         '    <div class="tbl-wrap" id="tbl-a"></div>\n'
+        '    <div id="charts-a"></div>\n'
         '    <div id="summary-a"></div>\n'
         '  </div>\n'
         '  <div id="view-b" class="hidden">\n'
