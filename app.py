@@ -7,7 +7,7 @@ import io
 import streamlit as st
 import pandas as pd
 
-from data_pipeline import build_velocity_table, PAIR_LABELS, STEP_LABELS
+from data_pipeline import build_velocity_table, build_standalone_html, PAIR_LABELS, STEP_LABELS
 
 st.set_page_config(page_title="O2C Velocity Dashboard", layout="wide")
 
@@ -84,9 +84,14 @@ with st.sidebar:
     st.caption(f"**{len(filt):,}** / {len(df):,} quotes matched")
 
 
-# ── View A builder (shared between tab render and HTML download) ───────────────
-def build_view_a_rows(filt: pd.DataFrame, src_prefix: str, factor: float,
-                      unit_label: str, rework: str) -> list[dict]:
+# ── View A builder ────────────────────────────────────────────────────────────
+def build_view_a_rows(
+    filt: pd.DataFrame,
+    src_prefix: str,
+    factor: float,
+    unit_label: str,
+    rework: str,
+) -> list[dict]:
     rows = []
     for i, label in enumerate(PAIR_LABELS, start=1):
         raw_col = f"{src_prefix}_{i}"
@@ -101,58 +106,17 @@ def build_view_a_rows(filt: pd.DataFrame, src_prefix: str, factor: float,
         }
 
         if rework == "All":
-            clean_raw  = pd.to_numeric(filt.loc[~filt["rework_flag"], raw_col], errors="coerce").dropna() * factor
-            rework_raw = pd.to_numeric(filt.loc[ filt["rework_flag"], raw_col], errors="coerce").dropna() * factor
+            clean_raw  = pd.to_numeric(
+                filt.loc[~filt["rework_flag"], raw_col], errors="coerce"
+            ).dropna() * factor
+            rework_raw = pd.to_numeric(
+                filt.loc[ filt["rework_flag"], raw_col], errors="coerce"
+            ).dropna() * factor
             row["Avg (Clean)"]  = round(float(clean_raw.mean()),  1) if len(clean_raw)  else None
             row["Avg (Rework)"] = round(float(rework_raw.mean()), 1) if len(rework_raw) else None
 
         rows.append(row)
     return rows
-
-
-# ── HTML snapshot helper ──────────────────────────────────────────────────────
-def build_view_a_html(rows: list[dict], unit_label: str) -> str:
-    if not rows:
-        return "<p>No data.</p>"
-    cols = list(rows[0].keys())
-    th = "".join(
-        f"<th style='padding:8px 14px;border:1px solid #ccc;"
-        f"background:#f0f4f8;text-align:left;white-space:nowrap'>{c}</th>"
-        for c in cols
-    )
-    body = ""
-    for row in rows:
-        tds = "".join(
-            f"<td style='padding:6px 14px;border:1px solid #e0e0e0;"
-            f"white-space:nowrap'>{'' if v is None else v}</td>"
-            for v in row.values()
-        )
-        body += f"<tr>{tds}</tr>\n"
-
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>O2C Stage Velocity — {unit_label}</title>
-  <style>
-    body {{ font-family: -apple-system, sans-serif; margin: 40px; color: #222; }}
-    h2   {{ margin-bottom: 4px; }}
-    p.sub {{ font-size: .85em; color: #666; margin-top: 0; }}
-    table {{ border-collapse: collapse; font-size: .9em; }}
-  </style>
-</head>
-<body>
-  <h2>O2C Stage Velocity</h2>
-  <p class="sub">Unit: {unit_label}</p>
-  <table>
-    <thead><tr>{th}</tr></thead>
-    <tbody>{body}</tbody>
-  </table>
-  <p style="font-size:.8em;color:#888;margin-top:16px">
-    ⚠️ Step 15→16 (Deployment Closed) is manually set and may lag actual install date.
-  </p>
-</body>
-</html>"""
 
 
 # ── Quote card renderer ───────────────────────────────────────────────────────
@@ -226,7 +190,7 @@ def render_quote_card(
         st.table(pd.DataFrame(timeline).set_index("#"))
 
 
-# ── Build View A data (used in both tab render and download) ──────────────────
+# ── Build View A data ─────────────────────────────────────────────────────────
 view_a_rows = build_view_a_rows(filt, src_prefix, factor, unit_label, rework)
 view_a_df   = pd.DataFrame(view_a_rows)
 
@@ -295,10 +259,10 @@ with dl1:
     )
 
 with dl2:
-    html_snap = build_view_a_html(view_a_rows, unit_label)
+    html_snap = build_standalone_html(df)
     st.download_button(
         "⬇️ Download HTML Report",
         data=html_snap,
-        file_name="o2c_stage_velocity.html",
+        file_name="o2c_velocity_dashboard.html",
         mime="text/html",
     )
