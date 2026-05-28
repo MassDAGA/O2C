@@ -644,43 +644,79 @@ function renderBarChart(allRows,u){
   return s;
 }
 
-function renderTimeline(allRows,u){
-  const W=900,padL=40,padR=40,axisW=W-padL-padR;
-  const H=185,axisY=105;
-  const avgs=allRows.map(r=>r.a);
-  /* cumulative position for each of the 16 steps */
-  const pos=[0];
-  for(let i=0;i<15;i++)pos.push(pos[i]+(avgs[i]!==null?avgs[i]:0));
-  const total=pos[15]||1;
-  const xp=i=>padL+(pos[i]/total)*axisW;
+function lerp(a,b,t){return Math.round(a+(b-a)*t);}
+function heatColor(t){
+  /* cool blue → yellow → hot red  (t: 0..1) */
+  if(t<0.5){const s=t*2;return`rgb(${lerp(191,253,s)},${lerp(219,224,s)},${lerp(254,71,s)})`;}
+  const s=(t-0.5)*2;return`rgb(${lerp(253,220,s)},${lerp(224,38,s)},${lerp(71,38,s)})`;
+}
+function heatTextColor(t){return t>0.55?'#fff':'#1e293b';}
+
+function renderHeatmap(allRows,u){
+  const W=860,padL=20,padR=20,barW=W-padL-padR,barY=34,barH=56;
+  const H=150;
+  const avgs=allRows.map(r=>r.a!==null?r.a:0);
+  const total=avgs.reduce((a,b)=>a+b,0)||1;
+  const nonNull=allRows.map(r=>r.a).filter(x=>x!==null);
+  const minV=nonNull.length?Math.min(...nonNull):0;
+  const maxV=nonNull.length?Math.max(...nonNull):1;
+  const range=maxV-minV||1;
+
+  /* cumulative x positions */
+  const xs=[padL];
+  avgs.forEach(v=>xs.push(xs[xs.length-1]+(v/total)*barW));
+
   const phases=[
     {s:0,e:8,col:'#3b82f6',lbl:'Quote'},
     {s:8,e:11,col:'#7c3aed',lbl:'DocuSign'},
     {s:11,e:12,col:'#0891b2',lbl:'Contract'},
     {s:12,e:15,col:'#059669',lbl:'Order'}
   ];
+
   let s=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block" font-family="system-ui,sans-serif">`;
-  /* phase bands */
+
+  /* phase labels above bar */
   phases.forEach(ph=>{
-    const x1=xp(ph.s),x2=xp(ph.e);
-    s+=`<rect x="${x1}" y="30" width="${x2-x1}" height="${H-58}" fill="${ph.col}" opacity="0.07" rx="4"/>`;
-    s+=`<text x="${(x1+x2)/2}" y="22" text-anchor="middle" font-size="10" fill="${ph.col}" font-weight="700">${ph.lbl}</text>`;
+    const x1=xs[ph.s],x2=xs[ph.e],mid=(x1+x2)/2;
+    s+=`<text x="${mid}" y="12" text-anchor="middle" font-size="10" fill="${ph.col}" font-weight="700">${ph.lbl}</text>`;
+    s+=`<line x1="${x1}" y1="${barY}" x2="${x1}" y2="${barY-8}" stroke="${ph.col}" stroke-width="1.5"/>`;
   });
-  /* axis */
-  s+=`<line x1="${padL}" y1="${axisY}" x2="${padL+axisW}" y2="${axisY}" stroke="#e2e8f0" stroke-width="2"/>`;
-  /* step markers */
-  STEP_LABELS.forEach((_,i)=>{
-    const xi=xp(i);
-    const c=avgs[i-1]!==null||i===0?STEP_COLORS[i]:'#cbd5e1';
-    const above=i%2===0;
-    s+=`<line x1="${xi}" y1="${axisY-5}" x2="${xi}" y2="${axisY+5}" stroke="${c}" stroke-width="1.5"/>`;
-    s+=`<circle cx="${xi}" cy="${axisY}" r="5" fill="${c}" stroke="#fff" stroke-width="1.5"/>`;
-    const warn=i===15?' ⚠':'';
-    s+=`<text x="${xi}" y="${axisY+(above?-13:19)}" text-anchor="middle" font-size="9" fill="${c}" font-weight="700">${i+1}${warn}</text>`;
+  /* right-end phase line */
+  s+=`<line x1="${xs[15]}" y1="${barY}" x2="${xs[15]}" y2="${barY-8}" stroke="#059669" stroke-width="1.5"/>`;
+
+  /* heatmap segments */
+  allRows.forEach((r,i)=>{
+    const x1=xs[i],x2=xs[i+1],sw=x2-x1;
+    const t=r.a!==null?(r.a-minV)/range:0;
+    const fill=r.a!==null?heatColor(t):'#f1f5f9';
+    const tc=r.a!==null?heatTextColor(t):'#94a3b8';
+    const warn=i===14?'⚠':'';
+    s+=`<rect x="${x1}" y="${barY}" width="${sw}" height="${barH}" fill="${fill}"/>`;
+    /* white divider between segments */
+    if(i>0)s+=`<line x1="${x1}" y1="${barY}" x2="${x1}" y2="${barY+barH}" stroke="#fff" stroke-width="1.5"/>`;
+    /* step number inside bar (always) */
+    s+=`<text x="${(x1+x2)/2}" y="${barY+barH/2+4}" text-anchor="middle" font-size="${sw>22?11:9}" font-weight="700" fill="${tc}">${i+1}${warn}</text>`;
+    /* value below bar — only if segment is wide enough */
+    if(sw>28)s+=`<text x="${(x1+x2)/2}" y="${barY+barH+14}" text-anchor="middle" font-size="9" fill="#374151">${r.a!==null?fmt(r.a)+u:'—'}</text>`;
   });
-  /* start / end labels */
-  s+=`<text x="${padL}" y="${axisY+38}" text-anchor="middle" font-size="10" fill="#64748b">Day 0</text>`;
-  s+=`<text x="${padL+axisW}" y="${axisY+38}" text-anchor="middle" font-size="10" fill="#64748b">${pos[15]>0?fmt(pos[15])+u:'—'}</text>`;
+
+  /* bar outline */
+  s+=`<rect x="${padL}" y="${barY}" width="${barW}" height="${barH}" fill="none" stroke="#e2e8f0" stroke-width="1"/>`;
+
+  /* "Day 0" + total labels */
+  s+=`<text x="${padL}" y="${barY+barH+28}" text-anchor="start" font-size="10" fill="#94a3b8">◀ Day 0</text>`;
+  s+=`<text x="${padL+barW}" y="${barY+barH+28}" text-anchor="end" font-size="10" fill="#94a3b8">Total avg: ${total>0?fmt(total)+u:'—'} ▶</text>`;
+
+  /* colour legend */
+  const lgX=padL,lgY=H-14,lgW=140,lgH=8;
+  const steps=20;
+  for(let i=0;i<steps;i++){
+    s+=`<rect x="${lgX+i*(lgW/steps)}" y="${lgY}" width="${lgW/steps+1}" height="${lgH}" fill="${heatColor(i/(steps-1))}"/>`;
+  }
+  s+=`<rect x="${lgX}" y="${lgY}" width="${lgW}" height="${lgH}" fill="none" stroke="#e2e8f0" stroke-width="0.5"/>`;
+  s+=`<text x="${lgX}" y="${lgY-3}" font-size="8" fill="#94a3b8">Less time</text>`;
+  s+=`<text x="${lgX+lgW}" y="${lgY-3}" text-anchor="end" font-size="8" fill="#94a3b8">More time</text>`;
+
   s+='</svg>';
   return s;
 }
@@ -689,8 +725,8 @@ function renderCharts(allRows,u){
   document.getElementById('charts-a').innerHTML=
     '<div class="chart-card"><div class="chart-hdr">Avg Time per Step Pair — '+unitName()+'</div>'
     +'<div class="chart-body">'+renderBarChart(allRows,u)+'</div></div>'
-    +'<div class="chart-card"><div class="chart-hdr">Cumulative Timeline — Day 0 → Avg Deployment</div>'
-    +'<div class="chart-body">'+renderTimeline(allRows,u)+'</div></div>';
+    +'<div class="chart-card"><div class="chart-hdr">Where Time Is Spent — Proportional Heatmap</div>'
+    +'<div class="chart-body">'+renderHeatmap(allRows,u)+'</div></div>';
 }
 
 function applyFilters(qs,s){
