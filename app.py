@@ -3,7 +3,6 @@ app.py — O2C Velocity Dashboard (Streamlit)
 Upload O2C_v1.xlsx to explore quote-level velocity across 16 process steps.
 """
 
-import io
 import streamlit as st
 import pandas as pd
 
@@ -244,25 +243,12 @@ with tab_b:
     elif qnum_input or opp_input:
         st.info("No matching quotes found.")
 
-# ── Downloads ─────────────────────────────────────────────────────────────────
+# ── Download ──────────────────────────────────────────────────────────────────
 st.divider()
-dl1, dl2 = st.columns(2)
-
-with dl1:
-    buf = io.BytesIO()
-    df.to_excel(buf, index=False, engine="xlsxwriter")
-    st.download_button(
-        "⬇️ Download Excel",
-        data=buf.getvalue(),
-        file_name="o2c_velocity.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-with dl2:
-    html_snap = build_standalone_html(df)
-    st.download_button(
-        "⬇️ Download HTML Report",
-        data=html_snap,
-        file_name="o2c_velocity_dashboard.html",
-        mime="text/html",
-    )
+html_snap = build_standalone_html(df)
+st.download_button(
+    "⬇️ Download HTML Report",
+    data=html_snap,
+    file_name="o2c_velocity_dashboard.html",
+    mime="text/html",
+)

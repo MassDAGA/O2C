@@ -423,6 +423,27 @@ def _serialize_quotes(df: pd.DataFrame) -> str:
         opp  = row.get("opportunity_id")
         rs   = row.get("rework_stage")
 
+        # ── Phase spans: Quote(s01→s09), DocuSign(s09→s12), Contract(s12→s13),
+        #                 Order(s13→s16), Full(s01→s16)  ─────────────────────
+        _phase_ep = [(0, 8), (8, 11), (11, 12), (12, 15), (0, 15)]
+        phase_cal_v: list = []
+        phase_biz_v: list = []
+        for s_idx, e_idx in _phase_ep:
+            ts_s = row.get(f"s{s_idx + 1:02d}")
+            ts_e = row.get(f"s{e_idx + 1:02d}")
+            if pd.notna(ts_s) and pd.notna(ts_e):
+                ts_s_t = pd.Timestamp(ts_s)
+                ts_e_t = pd.Timestamp(ts_e)
+                phase_cal_v.append((ts_e_t - ts_s_t).total_seconds() / 3600)
+                phase_biz_v.append(float(np.busday_count(
+                    np.datetime64(ts_s_t.date(), "D"),
+                    np.datetime64(ts_e_t.date(), "D"),
+                    holidays=US_HOLIDAY_DATES,
+                )))
+            else:
+                phase_cal_v.append(None)
+                phase_biz_v.append(None)
+
         records.append({
             "quote_id":         str(row.get("quote_id", "")),
             "quote_number":     f"Q{int(qnum)}" if pd.notna(qnum) else None,
@@ -440,6 +461,9 @@ def _serialize_quotes(df: pd.DataFrame) -> str:
             "cal":              cal_h,
             # biz: business days — JS multiplies by 8 for hours, uses as-is for days
             "biz":              biz_d,
+            # phase spans: [Quote, DocuSign, Contract, Order, Full]
+            "phase_cal":        phase_cal_v,
+            "phase_biz":        phase_biz_v,
         })
     return json.dumps(records, separators=(",", ":"))
 
@@ -526,13 +550,17 @@ header h1{font-size:18px;font-weight:700;letter-spacing:.01em}
 .ttbl .pend{color:#d97706;font-style:italic}
 .no-res{text-align:center;color:#94a3b8;padding:48px;font-size:15px}
 .hidden{display:none!important}
+.summary{background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-top:20px;overflow:hidden}
+.summary-hdr{background:#1e293b;color:#94a3b8;padding:10px 16px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
 """
 
     js = r"""
 const STEP_LABELS=["Quote Created","TechReview","TechApproved","CommercialReview","Commercial Approved","NSCT Review","Fully Approved","Presented","Accepted","Signature Sent to Customer","Customer Signed","Fully Executed","Contract Activated","Order Activated","Awaiting Install","Deployment Closed"];
 const PAIR_LABELS=["Quote Created → TechReview","TechReview → TechApproved","TechApproved → CommercialReview","CommercialReview → Commercial Approved","Commercial Approved → NSCT Review","NSCT Review → Fully Approved","Fully Approved → Presented","Presented → Accepted","Accepted → Signature Sent to Customer","Signature Sent to Customer → Customer Signed","Customer Signed → Fully Executed","Fully Executed → Contract Activated","Contract Activated → Order Activated","Order Activated → Awaiting Install","Awaiting Install → Deployment Closed"];
+const OBJECT_PAIRS={all:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14],quote:[0,1,2,3,4,5,6,7],docusign:[8,9,10],contract:[11],order:[12,13,14]};
+const PHASE_LABELS=['Quote Phase (Created → Accepted)','DocuSign Phase (Accepted → Fully Executed)','Contract Phase (Executed → Contract Activated)','Order Phase (Contract → Deployed)','Full Cycle (Created → Deployed)'];
 
-const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all'};
+const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all',object:'all'};
 
 function avg(arr){const v=arr.filter(x=>x!==null&&!isNaN(x));return v.length?v.reduce((a,b)=>a+b,0)/v.length:null;}
 function med(arr){const v=[...arr.filter(x=>x!==null&&!isNaN(x))].sort((a,b)=>a-b);if(!v.length)return null;const m=Math.floor(v.length/2);return v.length%2?v[m]:(v[m-1]+v[m])/2;}
@@ -551,6 +579,41 @@ function getVal(q,i){
 }
 function unitSuffix(){return state.unit==='hours'?'h':'d';}
 function unitName(){return(state.mode==='cal'?'Calendar ':'Business ')+(state.unit==='days'?'Days':'Hours');}
+
+/* phase-span unit conversion (same logic as getVal but reads phase_cal/phase_biz) */
+function getPhaseVal(q,i){
+  const raw=state.mode==='cal'?q.phase_cal[i]:q.phase_biz[i];
+  if(raw===null||raw===undefined||isNaN(raw))return null;
+  if(state.mode==='cal')return state.unit==='hours'?raw:raw/24;
+  return state.unit==='hours'?raw*8:raw;
+}
+
+function setObjectFilter(btn){
+  const grp=btn.closest('.chips');
+  grp.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+  btn.classList.add('on');
+  state.object=btn.dataset.v;
+  renderViewA();
+}
+
+function renderSummary(filtered){
+  const u=unitSuffix(),un=unitName();
+  let html='<div class="summary"><div class="summary-hdr">End-to-End Summary — '+un+'</div>'
+    +'<table class="vtbl"><thead><tr><th>Phase</th><th class="r">Avg ('+un+')</th>'
+    +'<th class="r">Median</th><th class="r">n</th></tr></thead><tbody>';
+  PHASE_LABELS.forEach(function(lbl,i){
+    const vals=filtered.map(function(q){return getPhaseVal(q,i);}).filter(function(x){return x!==null;});
+    const a=avg(vals),md=med(vals),n=vals.length;
+    const sep=i===4?' style="border-top:2px solid #e2e8f0;font-weight:600"':'';
+    html+='<tr'+sep+'>'
+      +'<td class="pair">'+escHtml(lbl)+'</td>'
+      +'<td class="'+(a===null?'muted':'num')+'">'+fmt(a)+'</td>'
+      +'<td class="'+(md===null?'muted':'num')+'">'+fmt(md)+'</td>'
+      +'<td class="num">'+n+'</td></tr>';
+  });
+  html+='</tbody></table></div>';
+  document.getElementById('summary-a').innerHTML=html;
+}
 
 function applyFilters(qs,s){
   s=s||state;
@@ -594,13 +657,16 @@ function renderViewA(){
   const isRework=state.rework==='rework';
   const cleanQ=isRework?applyFilters(QUOTES,{...state,rework:'clean'}):null;
   const u=unitSuffix(),un=unitName();
-  const rows=PAIR_LABELS.map((lbl,i)=>{
+  /* all 15 rows computed; then scoped to the active object filter */
+  const allRows=PAIR_LABELS.map((lbl,i)=>{
     const vals=filtered.map(q=>getVal(q,i)).filter(x=>x!==null);
     const a=avg(vals),md=med(vals),n=vals.length;
     let delta=null;
     if(isRework&&cleanQ){const cv=cleanQ.map(q=>getVal(q,i)).filter(x=>x!==null);const ca=avg(cv);if(a!==null&&ca!==null)delta=a-ca;}
-    return{lbl,a,md,n,delta};
+    return{lbl,a,md,n,delta,pairIdx:i};
   });
+  const vis=OBJECT_PAIRS[state.object]||OBJECT_PAIRS.all;
+  const rows=allRows.filter(r=>vis.includes(r.pairIdx));
   const callout=document.getElementById('callout-rework');
   if(isRework){
     const slower=rows.filter(r=>r.delta!==null&&r.delta>0);
@@ -616,13 +682,14 @@ function renderViewA(){
   }else{callout.classList.add('hidden');}
   const xhdr=isRework?'<th class="r">vs. Clean Path</th>':'';
   let html=`<table class="vtbl"><thead><tr><th>Step Pair</th><th class="r">Avg (${un})</th><th class="r">Median</th><th class="r">n</th>${xhdr}</tr></thead><tbody>`;
-  rows.forEach((r,i)=>{
-    const warn=i===14?' <span title="Manually set; may lag actual install date">⚠️</span>':'';
+  rows.forEach(r=>{
+    const warn=r.pairIdx===14?' <span title="Manually set; may lag actual install date">⚠️</span>':'';
     const xtd=isRework?(r.delta===null?'<td class="muted">—</td>':r.delta>0?`<td class="rwd">+${fmt(r.delta)}${u}</td>`:`<td class="rwd better">${fmt(r.delta)}${u}</td>`):'';
     html+=`<tr><td class="pair">${escHtml(r.lbl)}${warn}</td><td class="${r.a===null?'muted':'num'}">${fmt(r.a)}</td><td class="${r.md===null?'muted':'num'}">${fmt(r.md)}</td><td class="num">${r.n}</td>${xtd}</tr>`;
   });
   html+='</tbody></table>';
   document.getElementById('tbl-a').innerHTML=html;
+  renderSummary(filtered);
 }
 
 function doSearch(){const v=document.getElementById('si').value.trim();renderViewB(v);}
@@ -689,6 +756,14 @@ renderViewA();
         '  </div>\n'
         '  <div id="view-a">\n'
         '    <div class="filters">\n'
+        '      <div class="fg"><label>Object</label>\n'
+        '        <div class="chips" id="chips-object">'
+        '          <button class="chip on" data-v="all"      onclick="setObjectFilter(this)">All</button>'
+        '          <button class="chip"    data-v="quote"    onclick="setObjectFilter(this)">Quote</button>'
+        '          <button class="chip"    data-v="docusign" onclick="setObjectFilter(this)">DocuSign</button>'
+        '          <button class="chip"    data-v="contract" onclick="setObjectFilter(this)">Contract</button>'
+        '          <button class="chip"    data-v="order"    onclick="setObjectFilter(this)">Order</button>'
+        '        </div></div>\n'
         '      <div class="fg"><label>Month</label>\n'
         '        <div class="chips" id="chips-month">'
         '          <button class="chip on" data-v="all" onclick="setFilter(\'month\',this)">All</button>'
@@ -716,6 +791,7 @@ renderViewA();
         '    </div>\n'
         '    <div id="callout-rework" class="callout hidden"></div>\n'
         '    <div class="tbl-wrap" id="tbl-a"></div>\n'
+        '    <div id="summary-a"></div>\n'
         '  </div>\n'
         '  <div id="view-b" class="hidden">\n'
         '    <div class="search-box"><div class="search-row">\n'
