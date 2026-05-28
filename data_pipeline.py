@@ -512,6 +512,9 @@ header h1{font-size:18px;font-weight:700;letter-spacing:.01em}
 .tabs{display:flex;border-bottom:2px solid #e2e8f0;margin-bottom:20px;gap:4px}
 .tab{background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-2px;padding:10px 22px;cursor:pointer;font-size:14px;font-weight:500;color:#64748b;transition:.15s}
 .tab.active{color:#2563eb;border-bottom-color:#2563eb}
+.dv-toggle{display:inline-flex;border:1px solid #e2e8f0;border-radius:7px;overflow:hidden;margin-bottom:14px}
+.dv-btn{background:none;border:none;padding:8px 18px;font-size:12px;font-weight:600;color:#64748b;cursor:pointer;transition:.15s}
+.dv-btn.active{background:#2563eb;color:#fff}
 .filters{background:#fff;padding:16px 20px;border-radius:10px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,.08);display:flex;flex-wrap:wrap;gap:20px;align-items:center}
 .fg{display:flex;align-items:center;gap:8px}
 .fg label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#64748b;white-space:nowrap}
@@ -591,7 +594,7 @@ const STEP_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','
 /* short destination-step label for each of the 15 pairs (shown below heatmap) */
 const DEST_LABELS=['TechReview','TechApproved','Comm. Review','Comm. Approved','NSCT Review','Fully Approved','Presented','Accepted','Sig. Sent','Cust. Signed','Fully Exec.','Cntr. Activated','Order Active','Awaiting Install','Deployed'];
 
-const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all',object:'all'};
+const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all',object:'all',dataView:'table'};
 
 function avg(arr){const v=arr.filter(x=>x!==null&&!isNaN(x));return v.length?v.reduce((a,b)=>a+b,0)/v.length:null;}
 function med(arr){const v=[...arr.filter(x=>x!==null&&!isNaN(x))].sort((a,b)=>a-b);if(!v.length)return null;const m=Math.floor(v.length/2);return v.length%2?v[m]:(v[m-1]+v[m])/2;}
@@ -822,6 +825,13 @@ function setFilter(key,btn){
   grp.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
   btn.classList.add('on');state[key]=btn.dataset.v;renderViewA();
 }
+function setDataView(v){
+  state.dataView=v;
+  document.getElementById('tbl-a').classList.toggle('hidden',v!=='table');
+  document.getElementById('charts-a').classList.toggle('hidden',v!=='chart');
+  document.getElementById('dv-table').classList.toggle('active',v==='table');
+  document.getElementById('dv-chart').classList.toggle('active',v==='chart');
+}
 
 function renderViewA(){
   const filtered=applyFilters(QUOTES);
@@ -979,8 +989,12 @@ renderViewA();
         '      </div>\n'
         '      <div id="view-a">\n'
         '        <div id="callout-rework" class="callout hidden"></div>\n'
+        '        <div class="dv-toggle">\n'
+        "          <button id=\"dv-table\" class=\"dv-btn active\" onclick=\"setDataView('table')\">&#9638; Table</button>\n"
+        "          <button id=\"dv-chart\" class=\"dv-btn\"        onclick=\"setDataView('chart')\">&#128202; Chart</button>\n"
+        '        </div>\n'
         '        <div class="tbl-wrap" id="tbl-a"></div>\n'
-        '        <div id="charts-a"></div>\n'
+        '        <div id="charts-a" class="hidden"></div>\n'
         '        <div id="summary-a"></div>\n'
         '      </div>\n'
         '      <div id="view-b" class="hidden">\n'
