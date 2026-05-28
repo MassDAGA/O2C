@@ -565,6 +565,8 @@ const PHASE_LABELS=['Quote Phase (Created → Accepted)','DocuSign Phase (Accept
 /* object color palettes — indexed by pair (0-14) and step (0-15) */
 const OBJ_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
 const STEP_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
+/* short destination-step label for each of the 15 pairs (shown below heatmap) */
+const DEST_LABELS=['TechReview','TechApproved','Comm. Review','Comm. Approved','NSCT Review','Fully Approved','Presented','Accepted','Sig. Sent','Cust. Signed','Fully Exec.','Cntr. Activated','Order Active','Awaiting Install','Deployed'];
 
 const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all',object:'all'};
 
@@ -653,8 +655,8 @@ function heatColor(t){
 function heatTextColor(t){return t>0.55?'#fff':'#1e293b';}
 
 function renderHeatmap(allRows,u){
-  const W=860,padL=20,padR=20,barW=W-padL-padR,barY=34,barH=56;
-  const H=150;
+  const W=860,padL=20,padR=20,barW=W-padL-padR;
+  const barY=20,barH=58,H=200;
   const avgs=allRows.map(r=>r.a!==null?r.a:0);
   const total=avgs.reduce((a,b)=>a+b,0)||1;
   const nonNull=allRows.map(r=>r.a).filter(x=>x!==null);
@@ -662,60 +664,68 @@ function renderHeatmap(allRows,u){
   const maxV=nonNull.length?Math.max(...nonNull):1;
   const range=maxV-minV||1;
 
-  /* cumulative x positions */
+  /* cumulative x per segment boundary */
   const xs=[padL];
   avgs.forEach(v=>xs.push(xs[xs.length-1]+(v/total)*barW));
 
   const phases=[
-    {s:0,e:8,col:'#3b82f6',lbl:'Quote'},
-    {s:8,e:11,col:'#7c3aed',lbl:'DocuSign'},
-    {s:11,e:12,col:'#0891b2',lbl:'Contract'},
-    {s:12,e:15,col:'#059669',lbl:'Order'}
+    {s:0,e:8,col:'#3b82f6',lbl:'Quote (1–8)'},
+    {s:8,e:11,col:'#7c3aed',lbl:'DocuSign (9–11)'},
+    {s:11,e:12,col:'#0891b2',lbl:'Contract (12)'},
+    {s:12,e:15,col:'#059669',lbl:'Order (13–15)'}
   ];
 
   let s=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block" font-family="system-ui,sans-serif">`;
 
-  /* phase labels above bar */
-  phases.forEach(ph=>{
-    const x1=xs[ph.s],x2=xs[ph.e],mid=(x1+x2)/2;
-    s+=`<text x="${mid}" y="12" text-anchor="middle" font-size="10" fill="${ph.col}" font-weight="700">${ph.lbl}</text>`;
-    s+=`<line x1="${x1}" y1="${barY}" x2="${x1}" y2="${barY-8}" stroke="${ph.col}" stroke-width="1.5"/>`;
-  });
-  /* right-end phase line */
-  s+=`<line x1="${xs[15]}" y1="${barY}" x2="${xs[15]}" y2="${barY-8}" stroke="#059669" stroke-width="1.5"/>`;
-
-  /* heatmap segments */
+  /* ── segments ── */
   allRows.forEach((r,i)=>{
     const x1=xs[i],x2=xs[i+1],sw=x2-x1;
     const t=r.a!==null?(r.a-minV)/range:0;
     const fill=r.a!==null?heatColor(t):'#f1f5f9';
     const tc=r.a!==null?heatTextColor(t):'#94a3b8';
-    const warn=i===14?'⚠':'';
+    /* fill */
     s+=`<rect x="${x1}" y="${barY}" width="${sw}" height="${barH}" fill="${fill}"/>`;
-    /* white divider between segments */
+    /* phase-colour top strip (5px) */
+    s+=`<rect x="${x1}" y="${barY}" width="${sw}" height="5" fill="${OBJ_COLORS[i]}" opacity="0.55"/>`;
+    /* white divider */
     if(i>0)s+=`<line x1="${x1}" y1="${barY}" x2="${x1}" y2="${barY+barH}" stroke="#fff" stroke-width="1.5"/>`;
-    /* step number inside bar (always) */
-    s+=`<text x="${(x1+x2)/2}" y="${barY+barH/2+4}" text-anchor="middle" font-size="${sw>22?11:9}" font-weight="700" fill="${tc}">${i+1}${warn}</text>`;
-    /* value below bar — only if segment is wide enough */
-    if(sw>28)s+=`<text x="${(x1+x2)/2}" y="${barY+barH+14}" text-anchor="middle" font-size="9" fill="#374151">${r.a!==null?fmt(r.a)+u:'—'}</text>`;
+    /* step number */
+    const fs=sw>22?13:10;
+    s+=`<text x="${(x1+x2)/2}" y="${barY+barH/2+(sw>36?1:5)}" text-anchor="middle" font-size="${fs}" font-weight="700" fill="${tc}">${i+1}</text>`;
+    /* value — only if segment is wide enough to show without crowding */
+    if(sw>36)s+=`<text x="${(x1+x2)/2}" y="${barY+barH/2+15}" text-anchor="middle" font-size="9" fill="${tc}" opacity="0.9">${r.a!==null?fmt(r.a)+u:''}</text>`;
   });
 
   /* bar outline */
-  s+=`<rect x="${padL}" y="${barY}" width="${barW}" height="${barH}" fill="none" stroke="#e2e8f0" stroke-width="1"/>`;
+  s+=`<rect x="${padL}" y="${barY}" width="${barW}" height="${barH}" fill="none" stroke="#cbd5e1" stroke-width="1"/>`;
 
-  /* "Day 0" + total labels */
-  s+=`<text x="${padL}" y="${barY+barH+28}" text-anchor="start" font-size="10" fill="#94a3b8">◀ Day 0</text>`;
-  s+=`<text x="${padL+barW}" y="${barY+barH+28}" text-anchor="end" font-size="10" fill="#94a3b8">Total avg: ${total>0?fmt(total)+u:'—'} ▶</text>`;
+  /* ── rotated step-name labels below bar ── */
+  /* warn on last pair */
+  allRows.forEach((r,i)=>{
+    const cx=(xs[i]+xs[i+1])/2;
+    const lbl=DEST_LABELS[i]+(i===14?' ⚠':'');
+    s+=`<text transform="translate(${cx},${barY+barH+6}) rotate(-48)" text-anchor="end" font-size="9.5" fill="#374151">${escHtml(lbl)}</text>`;
+  });
 
-  /* colour legend */
-  const lgX=padL,lgY=H-14,lgW=140,lgH=8;
-  const steps=20;
-  for(let i=0;i<steps;i++){
-    s+=`<rect x="${lgX+i*(lgW/steps)}" y="${lgY}" width="${lgW/steps+1}" height="${lgH}" fill="${heatColor(i/(steps-1))}"/>`;
+  /* ── bottom legend row ── */
+  const lgY=H-16;
+  /* gradient swatch */
+  const lgW=90,lgH=7,swatchSteps=18;
+  for(let i=0;i<swatchSteps;i++){
+    s+=`<rect x="${padL+i*(lgW/swatchSteps)}" y="${lgY}" width="${lgW/swatchSteps+0.5}" height="${lgH}" fill="${heatColor(i/(swatchSteps-1))}"/>`;
   }
-  s+=`<rect x="${lgX}" y="${lgY}" width="${lgW}" height="${lgH}" fill="none" stroke="#e2e8f0" stroke-width="0.5"/>`;
-  s+=`<text x="${lgX}" y="${lgY-3}" font-size="8" fill="#94a3b8">Less time</text>`;
-  s+=`<text x="${lgX+lgW}" y="${lgY-3}" text-anchor="end" font-size="8" fill="#94a3b8">More time</text>`;
+  s+=`<rect x="${padL}" y="${lgY}" width="${lgW}" height="${lgH}" fill="none" stroke="#e2e8f0" stroke-width="0.5"/>`;
+  s+=`<text x="${padL}" y="${lgY-3}" font-size="8" fill="#94a3b8">Less time</text>`;
+  s+=`<text x="${padL+lgW}" y="${lgY-3}" text-anchor="end" font-size="8" fill="#94a3b8">More time</text>`;
+  /* phase legend (inline, right of gradient) */
+  let plx=padL+lgW+24;
+  phases.forEach(ph=>{
+    s+=`<rect x="${plx}" y="${lgY}" width="${lgH+1}" height="${lgH}" fill="${ph.col}" rx="1"/>`;
+    s+=`<text x="${plx+lgH+4}" y="${lgY+lgH-1}" font-size="9" fill="#374151">${ph.lbl}</text>`;
+    plx+=135;
+  });
+  /* Day 0 / total (far right) */
+  s+=`<text x="${padL+barW}" y="${lgY+lgH}" text-anchor="end" font-size="9" fill="#94a3b8">Total avg: ${total>0?fmt(total)+u:'—'}</text>`;
 
   s+='</svg>';
   return s;
