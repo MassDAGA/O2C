@@ -430,7 +430,7 @@ with tab_b:
 st.divider()
 html_snap = build_standalone_html(df)
 st.download_button(
-    "⬇️ Download HTML Report",
+    "⬇️ Download Local Interactive Dasboard",
     data=html_snap,
     file_name="o2c_velocity_dashboard.html",
     mime="text/html",
