@@ -514,6 +514,7 @@ def _serialize_quotes(df: pd.DataFrame) -> str:
             "resend_suspected": bool(row.get("resend_suspected", False)),
             "resend_gap_days":  (None if pd.isna(row.get("resend_gap_days"))
                                  else float(row.get("resend_gap_days"))),
+            "has_ds_sent":      bool(pd.notna(row.get("docusign_sent_1"))),
             "timestamps":       timestamps,
             # cal: calendar hours — JS divides by 24 for days, uses as-is for hours
             "cal":              cal_h,
@@ -623,6 +624,8 @@ header h1{font-size:18px;font-weight:700;letter-spacing:.01em}
 .chart-card{background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-top:20px;overflow:hidden}
 .chart-hdr{background:#1e293b;color:#94a3b8;padding:10px 16px;font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase}
 .chart-body{padding:16px 12px 12px}
+.stat-select{padding:8px 10px;border:1px solid #d1d5db;border-radius:7px;font-size:13px;margin-bottom:12px;min-width:280px;background:#fff;color:#1a202c}
+.vtbl th[title]{cursor:help;text-decoration:underline dotted #64748b}
 """
 
     # Labels injected from the Python constants above so the HTML export and the
@@ -639,10 +642,19 @@ const OBJECT_PAIRS={all:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14],quote:[0,1,2,3,4,5,
 const OBJ_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
 const STEP_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
 
-const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all',object:'all',dataView:'table'};
+const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all',object:'all',dataView:'table',resend:'all',statPair:8};
 
 function avg(arr){const v=arr.filter(x=>x!==null&&!isNaN(x));return v.length?v.reduce((a,b)=>a+b,0)/v.length:null;}
 function med(arr){const v=[...arr.filter(x=>x!==null&&!isNaN(x))].sort((a,b)=>a-b);if(!v.length)return null;const m=Math.floor(v.length/2);return v.length%2?v[m]:(v[m-1]+v[m])/2;}
+/* linear-interpolation percentile (matches pandas/numpy default) */
+function percentile(sorted,p){if(!sorted.length)return null;const idx=(sorted.length-1)*p,lo=Math.floor(idx),hi=Math.ceil(idx);return lo===hi?sorted[lo]:sorted[lo]+(sorted[hi]-sorted[lo])*(idx-lo);}
+function stdev(arr){if(!arr.length)return null;const m=arr.reduce((a,b)=>a+b,0)/arr.length;return Math.sqrt(arr.reduce((a,b)=>a+(b-m)*(b-m),0)/arr.length);}
+/* per-step-pair stats over a filtered set (excludes negative deltas) */
+function pairStats(filtered,i){
+  const vals=filtered.map(q=>getVal(q,i)).filter(x=>x!==null&&x>=0).sort((a,b)=>a-b);
+  if(!vals.length)return null;
+  return{n:vals.length,min:vals[0],max:vals[vals.length-1],mean:vals.reduce((a,b)=>a+b,0)/vals.length,median:percentile(vals,.5),std:stdev(vals),p90:percentile(vals,.9),p95:percentile(vals,.95),vals:vals};
+}
 function fmt(v,d=1){return v===null||v===undefined?'—':v.toFixed(d);}
 function fmtTs(iso){if(!iso)return null;const d=new Date(iso);return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+d.toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit'});}
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -843,6 +855,7 @@ function applyFilters(qs,s){
     if(s.nsct==='non_nsct'&&q.nsct_flag)return false;
     if(s.outcome!=='all'&&q.outcome!==s.outcome)return false;
     if(s.month&&s.month!=='all'&&tsMonth(q.timestamps[0])!==s.month)return false;
+    if(s.resend==='exclude'&&q.resend_suspected)return false;
     return true;
   });
 }
@@ -851,25 +864,26 @@ function setMode(m){
   state.mode=m;
   document.getElementById('btn-cal').classList.toggle('active',m==='cal');
   document.getElementById('btn-biz').classList.toggle('active',m==='biz');
-  renderViewA();const sv=document.getElementById('si').value.trim();if(sv)renderViewB(sv);
+  renderViewA();renderViewC();const sv=document.getElementById('si').value.trim();if(sv)renderViewB(sv);
 }
 function setUnit(u){
   state.unit=u;
   document.getElementById('btn-days').classList.toggle('active',u==='days');
   document.getElementById('btn-hours').classList.toggle('active',u==='hours');
-  renderViewA();const sv=document.getElementById('si').value.trim();if(sv)renderViewB(sv);
+  renderViewA();renderViewC();const sv=document.getElementById('si').value.trim();if(sv)renderViewB(sv);
 }
 function setView(v){
-  document.getElementById('view-a').classList.toggle('hidden',v!=='A');
-  document.getElementById('view-b').classList.toggle('hidden',v!=='B');
-  document.getElementById('tab-a').classList.toggle('active',v==='A');
-  document.getElementById('tab-b').classList.toggle('active',v==='B');
+  ['A','B','C'].forEach(function(x){
+    document.getElementById('view-'+x.toLowerCase()).classList.toggle('hidden',x!==v);
+    document.getElementById('tab-'+x.toLowerCase()).classList.toggle('active',x===v);
+  });
 }
 function setFilter(key,btn){
   const grp=btn.closest('.sb-chips,.chips');
   grp.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
-  btn.classList.add('on');state[key]=btn.dataset.v;renderViewA();
+  btn.classList.add('on');state[key]=btn.dataset.v;renderViewA();renderViewC();
 }
+function setStatPair(v){state.statPair=+v;renderStatHist(applyFilters(QUOTES),state.statPair);}
 function setDataView(v){
   state.dataView=v;
   document.getElementById('tbl-a').classList.toggle('hidden',v!=='table');
@@ -919,6 +933,63 @@ function renderViewA(){
   renderSummary(filtered);
 }
 
+/* ── View C: Statistical Analysis (resend callout + stats table + histogram) ── */
+const _STAT_HELP={n:'Quotes with a valid, non-negative duration (after filters).',Min:'Shortest observed duration.',Max:'Longest observed duration — the outlier ceiling.',Mean:'Average; pulled upward by long tails.',Median:'Middle value; half faster, half slower — robust to outliers.',Std:'Standard deviation — spread around the mean.',p90:'90% of quotes finish this step within this time.',p95:'95% finish within this time — highlights the slow tail.'};
+
+function renderResendCallout(){
+  const co=document.getElementById('callout-resend');
+  const flagged=QUOTES.filter(q=>q.resend_suspected);
+  const nSent=QUOTES.filter(q=>q.has_ds_sent).length;
+  if(!flagged.length){co.classList.add('hidden');return;}
+  const gaps=flagged.map(q=>q.resend_gap_days).filter(x=>x!==null&&!isNaN(x)).sort((a,b)=>a-b);
+  const gMed=percentile(gaps,.5),gMax=gaps[gaps.length-1],gSum=gaps.reduce((a,b)=>a+b,0);
+  co.innerHTML='<h4>Resend Opportunity</h4><p><strong>'+flagged.length+' quotes ('+Math.round(flagged.length/Math.max(nSent,1)*100)+'% of DocuSign-sent)</strong> show a voided/resent envelope. The envelope was actually sent a median of <strong>'+gMed.toFixed(1)+' days</strong> (up to '+Math.round(gMax)+') after the quote was marked ‘Sent for signature’ — a total of <strong>'+Math.round(gSum)+' days</strong> of avoidable delay. Use the sidebar <strong>Resend-suspected → Exclude</strong> to see clean-process metrics.</p>';
+  co.classList.remove('hidden');
+}
+
+function renderStatHist(filtered,i){
+  const el=document.getElementById('stat-hist');
+  const s=pairStats(filtered,i);
+  if(!s){el.innerHTML='<div class="no-res">No data for this step pair under the current filters.</div>';return;}
+  const vals=s.vals,u=unitSuffix();
+  const W=860,padL=48,padR=20,padT=16,padB=42,H=320,bins=30;
+  const min=0,max=s.max||1,bw=(max-min)/bins||1;
+  const counts=new Array(bins).fill(0);
+  vals.forEach(v=>{let b=Math.floor((v-min)/bw);if(b<0)b=0;if(b>=bins)b=bins-1;counts[b]++;});
+  const maxC=Math.max.apply(null,counts.concat([1]));
+  const plotW=W-padL-padR,plotH=H-padT-padB;
+  let svg=`<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block" font-family="system-ui,sans-serif">`;
+  for(let g=0;g<=4;g++){const yv=Math.round(maxC*g/4);const y=padT+plotH-(plotH*g/4);svg+=`<line x1="${padL}" y1="${y}" x2="${W-padR}" y2="${y}" stroke="#f1f5f9"/><text x="${padL-6}" y="${y+3}" text-anchor="end" font-size="9" fill="#94a3b8">${yv}</text>`;}
+  counts.forEach((c,b)=>{if(!c)return;const x=padL+(plotW*b/bins);const w=Math.max(plotW/bins-1,1);const bh=plotH*c/maxC;const y=padT+plotH-bh;svg+=`<rect x="${x}" y="${y}" width="${w}" height="${bh}" fill="#3b82f6" opacity="0.8" rx="1"><title>${c} quotes</title></rect>`;});
+  for(let t=0;t<=6;t++){const xv=min+(max-min)*t/6;const x=padL+plotW*t/6;svg+=`<text x="${x}" y="${H-padB+16}" text-anchor="middle" font-size="9" fill="#94a3b8">${xv.toFixed(1)}</text>`;}
+  svg+=`<text x="${padL+plotW/2}" y="${H-6}" text-anchor="middle" font-size="10" fill="#64748b">Duration (${unitName()})</text>`;
+  [['median',s.median],['p90',s.p90],['p95',s.p95]].forEach(pr=>{const lb=pr[0],val=pr[1];if(val==null)return;const x=padL+plotW*(val-min)/((max-min)||1);svg+=`<line x1="${x}" y1="${padT}" x2="${x}" y2="${padT+plotH}" stroke="#dc2626" stroke-width="1" stroke-dasharray="4 3"><title>${lb}: ${val.toFixed(1)}${u}</title></line><text x="${x}" y="${padT-3}" text-anchor="middle" font-size="8" fill="#dc2626">${lb}</text>`;});
+  svg+='</svg>';
+  el.innerHTML=svg;
+}
+
+function renderViewC(){
+  const filtered=applyFilters(QUOTES),u=unitSuffix();
+  renderResendCallout();
+  let h='<table class="vtbl"><thead><tr><th>Step Pair</th>'
+    +'<th class="r" title="'+_STAT_HELP.n+'">n</th>'
+    +'<th class="r" title="'+_STAT_HELP.Min+'">Min ('+u+')</th>'
+    +'<th class="r" title="'+_STAT_HELP.Max+'">Max ('+u+')</th>'
+    +'<th class="r" title="'+_STAT_HELP.Mean+'">Mean ('+u+')</th>'
+    +'<th class="r" title="'+_STAT_HELP.Median+'">Median ('+u+')</th>'
+    +'<th class="r" title="'+_STAT_HELP.Std+'">Std ('+u+')</th>'
+    +'<th class="r" title="'+_STAT_HELP.p90+'">p90 ('+u+')</th>'
+    +'<th class="r" title="'+_STAT_HELP.p95+'">p95 ('+u+')</th></tr></thead><tbody>';
+  PAIR_LABELS.forEach((lbl,i)=>{
+    const s=pairStats(filtered,i);
+    if(s){h+='<tr><td class="pair">'+escHtml(lbl)+'</td><td class="num">'+s.n+'</td><td class="num">'+fmt(s.min)+'</td><td class="num">'+fmt(s.max)+'</td><td class="num">'+fmt(s.mean)+'</td><td class="num">'+fmt(s.median)+'</td><td class="num">'+fmt(s.std)+'</td><td class="num">'+fmt(s.p90)+'</td><td class="num">'+fmt(s.p95)+'</td></tr>';}
+    else{h+='<tr><td class="pair">'+escHtml(lbl)+'</td><td class="num">0</td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td></tr>';}
+  });
+  h+='</tbody></table>';
+  document.getElementById('stats-c').innerHTML=h;
+  renderStatHist(filtered,state.statPair);
+}
+
 function doSearch(){const v=document.getElementById('si').value.trim();renderViewB(v);}
 function renderViewB(search){
   const el=document.getElementById('sr');
@@ -958,8 +1029,11 @@ function buildCard(q){
     btn.onclick=function(){setFilter('month',this);};
     cont.appendChild(btn);
   });
+  const sel=document.getElementById('stat-sel');
+  PAIR_LABELS.forEach((lbl,i)=>{const o=document.createElement('option');o.value=i;o.textContent=lbl;if(i===state.statPair)o.selected=true;sel.appendChild(o);});
 })();
 renderViewA();
+renderViewC();
 """
 
     body = (
@@ -1025,12 +1099,20 @@ renderViewA();
         '          <button class="chip"    data-v="In Progress" onclick="setFilter(\'outcome\',this)">In Progress</button>\n'
         '        </div>\n'
         '      </div>\n'
+        '      <div class="sb-section">\n'
+        '        <span class="sb-lbl">Resend-suspected</span>\n'
+        '        <div class="sb-chips" id="chips-resend">\n'
+        '          <button class="chip on" data-v="all"     onclick="setFilter(\'resend\',this)">All</button>\n'
+        '          <button class="chip"    data-v="exclude" onclick="setFilter(\'resend\',this)">Exclude</button>\n'
+        '        </div>\n'
+        '      </div>\n'
         '    </div>\n'
         # ── Main content ──────────────────────────────────────────────────────
         '    <div class="main">\n'
         '      <div class="tabs">\n'
-        "        <button id=\"tab-a\" class=\"tab active\" onclick=\"setView('A')\">&#128202; Aggregate Velocity</button>\n"
+        "        <button id=\"tab-a\" class=\"tab active\" onclick=\"setView('A')\">&#128202; Velocity</button>\n"
         "        <button id=\"tab-b\" class=\"tab\"        onclick=\"setView('B')\">&#128269; Per-Quote Timeline</button>\n"
+        "        <button id=\"tab-c\" class=\"tab\"        onclick=\"setView('C')\">&#128200; Statistical Analysis</button>\n"
         '      </div>\n'
         '      <div id="view-a">\n'
         '        <div id="callout-rework" class="callout hidden"></div>\n'
@@ -1048,6 +1130,17 @@ renderViewA();
         '          <button onclick="doSearch()">Search</button>\n'
         '        </div></div>\n'
         '        <div id="sr"></div>\n'
+        '      </div>\n'
+        '      <div id="view-c" class="hidden">\n'
+        '        <div id="callout-resend" class="callout hidden"></div>\n'
+        '        <div class="tbl-wrap" id="stats-c"></div>\n'
+        '        <div class="chart-card">\n'
+        '          <div class="chart-hdr">Distribution by Step Pair</div>\n'
+        '          <div class="chart-body">\n'
+        '            <select id="stat-sel" class="stat-select" onchange="setStatPair(this.value)"></select>\n'
+        '            <div id="stat-hist"></div>\n'
+        '          </div>\n'
+        '        </div>\n'
         '      </div>\n'
         '    </div>\n'
         '  </div>\n'
