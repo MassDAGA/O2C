@@ -29,17 +29,17 @@ except ImportError:
 
 STEP_LABELS = [
     "Quote Created",        # s01
-    "TechReview",           # s02
-    "TechApproved",         # s03
-    "CommercialReview",     # s04
+    "Tech Review",          # s02
+    "Tech Approved",        # s03
+    "Commercial Review",    # s04
     "Commercial Approved",  # s05
     "NSCT Review",          # s06
     "Fully Approved",       # s07
     "Presented",            # s08
     "Accepted",             # s09
-    "Signature Sent",       # s10
+    "Signature Sent",       # s10  (sourced from the MCF signature status)
     "Customer Signed",      # s11
-    "Fully Executed",       # s12
+    "Counter Signature",    # s12  (was "Fully Executed")
     "Contract Activated",   # s13
     "Order Activated",      # s14
     "Awaiting Install",     # s15
@@ -47,19 +47,24 @@ STEP_LABELS = [
 ]
 
 PAIR_LABELS = [
-    f"{STEP_LABELS[i]} → {STEP_LABELS[i + 1]}" for i in range(15)
+    f"{STEP_LABELS[i]} to {STEP_LABELS[i + 1]}" for i in range(15)
 ]
 
 # ── Phase spans (end-to-end summary) ──────────────────────────────────────────
 # (start_step_idx, end_step_idx) — 0-based into the 16 steps.
 _PHASE_EP = [(0, 8), (8, 11), (11, 12), (12, 15), (0, 15)]
 PHASE_LABELS = [
-    "Quote Phase (Created → Accepted)",
-    "DocuSign Phase (Accepted → Fully Executed)",
-    "Contract Phase (Executed → Contract Activated)",
-    "Order Phase (Contract → Deployed)",
-    "Full Cycle (Created → Deployed)",
+    "Quote Phase (Created to Accepted)",
+    "DocuSign Phase (Accepted to Counter Signature)",
+    "Contract Phase (Counter Signature to Contract Activated)",
+    "Order Phase (Contract to Deployed)",
+    "Full Cycle (Created to Deployed)",
 ]
+
+# ── Signature-status sourcing / resend detection ──────────────────────────────
+_MCF_FIELD = "MCF_Signature_Status__c"
+_MCF_SENT_VALUE = "Sent for signature"
+RESEND_GAP_DAYS = 1  # DocuSign send lagging the MCF status by more than this = resend-suspected
 
 # ── US holiday dates for business-day calculation ─────────────────────────────
 
@@ -206,6 +211,16 @@ def _extract_quote_events(qh: pd.DataFrame) -> pd.DataFrame:
         .reset_index()
     )
     qt = qt.merge(meta, on="quote_id", how="left")
+
+    # s10 "Signature Sent" — sourced from the Quote's MCF signature status
+    # ("Sent for signature"), not DocuSign Date Sent. This captures the original
+    # send intent and is immune to the DocuSign void/resend survivorship bias.
+    s10 = (
+        qh[(qh["field"] == _MCF_FIELD) & (qh["new_value"] == _MCF_SENT_VALUE)]
+        .groupby("quote_id", sort=False)["created_date"].min()
+        .rename("s10")
+    )
+    qt = qt.merge(s10.reset_index(), on="quote_id", how="left")
     return qt
 
 
@@ -265,14 +280,20 @@ def _join_contract_history(qt: pd.DataFrame, ch: pd.DataFrame) -> pd.DataFrame:
 
 
 def _join_docusign(qt: pd.DataFrame, ds: pd.DataFrame) -> pd.DataFrame:
-    """Steps 10–12 from DocuSign, joined on contract_number."""
+    """Steps 11–12 from DocuSign, joined on contract_number.
+
+    s10 ("Signature Sent") is NOT taken from DocuSign — it comes from the MCF
+    signature status (see _extract_quote_events). DocuSign routing-order-1
+    Date Sent is kept as ``docusign_sent_1`` purely to detect voided-and-resent
+    envelopes against the MCF s10 (see _compute_resend_flag).
+    """
     # Ensure join key types match
     qt["contract_number"] = qt["contract_number"].astype("Int64")
 
-    s10 = (
+    docusign_sent_1 = (
         ds[ds["routing_order"] == 1]
         .groupby("contract_number", sort=False)["date_sent"].min()
-        .rename("s10")
+        .rename("docusign_sent_1")
     )
     s11 = (
         ds[ds["routing_order"] == 1]
@@ -284,7 +305,7 @@ def _join_docusign(qt: pd.DataFrame, ds: pd.DataFrame) -> pd.DataFrame:
         .groupby("contract_number", sort=False)["date_signed"].min()
         .rename("s12")
     )
-    for s in [s10, s11, s12]:
+    for s in [docusign_sent_1, s11, s12]:
         qt = qt.merge(s.reset_index(), on="contract_number", how="left")
 
     # Reorder step columns into canonical order
@@ -384,6 +405,23 @@ def _compute_deltas(qt: pd.DataFrame) -> pd.DataFrame:
     return qt
 
 
+def _compute_resend_flag(qt: pd.DataFrame) -> pd.DataFrame:
+    """Flag quotes whose surviving DocuSign envelope was sent well after the MCF
+    'Sent for signature' status — the signature of a voided-and-resent envelope.
+
+    resend_gap_days = docusign_sent_1 − s10 (calendar days). resend_suspected is
+    True when both timestamps exist and the gap exceeds RESEND_GAP_DAYS. Quotes
+    with no surviving DocuSign envelope cannot be flagged (the export omits voided
+    envelopes), so this is a lower bound.
+    """
+    gap = (qt["docusign_sent_1"] - qt["s10"]).dt.total_seconds() / 86400
+    qt["resend_gap_days"] = gap
+    qt["resend_suspected"] = (
+        qt["docusign_sent_1"].notna() & qt["s10"].notna() & (gap > RESEND_GAP_DAYS)
+    )
+    return qt
+
+
 def _compute_phases(qt: pd.DataFrame) -> pd.DataFrame:
     """Add phase-span columns phase_cal_{k} (hours) / phase_biz_{k} (days), k=0..4.
 
@@ -421,6 +459,7 @@ def build_velocity_table(file_bytes: bytes) -> pd.DataFrame:
     qt = _compute_flags(qt, qh)
     qt = _compute_deltas(qt)
     qt = _compute_phases(qt)
+    qt = _compute_resend_flag(qt)
 
     return qt.reset_index(drop=True)
 
@@ -472,6 +511,9 @@ def _serialize_quotes(df: pd.DataFrame) -> str:
             "nsct_flag":        bool(row.get("nsct_flag", False)),
             "outcome":          str(row.get("outcome", "In Progress")),
             "multi_order_flag": bool(row.get("multi_order_flag", False)),
+            "resend_suspected": bool(row.get("resend_suspected", False)),
+            "resend_gap_days":  (None if pd.isna(row.get("resend_gap_days"))
+                                 else float(row.get("resend_gap_days"))),
             "timestamps":       timestamps,
             # cal: calendar hours — JS divides by 24 for days, uses as-is for hours
             "cal":              cal_h,
@@ -583,16 +625,19 @@ header h1{font-size:18px;font-weight:700;letter-spacing:.01em}
 .chart-body{padding:16px 12px 12px}
 """
 
-    js = r"""
-const STEP_LABELS=["Quote Created","TechReview","TechApproved","CommercialReview","Commercial Approved","NSCT Review","Fully Approved","Presented","Accepted","Signature Sent to Customer","Customer Signed","Fully Executed","Contract Activated","Order Activated","Awaiting Install","Deployment Closed"];
-const PAIR_LABELS=["Quote Created → TechReview","TechReview → TechApproved","TechApproved → CommercialReview","CommercialReview → Commercial Approved","Commercial Approved → NSCT Review","NSCT Review → Fully Approved","Fully Approved → Presented","Presented → Accepted","Accepted → Signature Sent to Customer","Signature Sent to Customer → Customer Signed","Customer Signed → Fully Executed","Fully Executed → Contract Activated","Contract Activated → Order Activated","Order Activated → Awaiting Install","Awaiting Install → Deployment Closed"];
+    # Labels injected from the Python constants above so the HTML export and the
+    # Streamlit app stay in lock-step (single source of truth).
+    label_js = (
+        f"const STEP_LABELS={json.dumps(STEP_LABELS)};\n"
+        f"const PAIR_LABELS={json.dumps(PAIR_LABELS)};\n"
+        f"const PHASE_LABELS={json.dumps(PHASE_LABELS)};\n"
+        f"const DEST_LABELS={json.dumps([STEP_LABELS[i + 1] for i in range(15)])};\n"
+    )
+    js = label_js + r"""
 const OBJECT_PAIRS={all:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14],quote:[0,1,2,3,4,5,6,7],docusign:[8,9,10],contract:[11],order:[12,13,14]};
-const PHASE_LABELS=['Quote Phase (Created → Accepted)','DocuSign Phase (Accepted → Fully Executed)','Contract Phase (Executed → Contract Activated)','Order Phase (Contract → Deployed)','Full Cycle (Created → Deployed)'];
 /* object color palettes — indexed by pair (0-14) and step (0-15) */
 const OBJ_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
 const STEP_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
-/* short destination-step label for each of the 15 pairs (shown below heatmap) */
-const DEST_LABELS=['TechReview','TechApproved','Comm. Review','Comm. Approved','NSCT Review','Fully Approved','Presented','Accepted','Sig. Sent','Cust. Signed','Fully Exec.','Cntr. Activated','Order Active','Awaiting Install','Deployed'];
 
 const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all',object:'all',dataView:'table'};
 

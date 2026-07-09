@@ -105,6 +105,13 @@ with st.sidebar:
         default=[],
     )
 
+    resend = st.radio(
+        "Resend-suspected",
+        ["Include", "Exclude"],
+        help="Exclude quotes whose DocuSign envelope was sent more than a day after "
+             "the MCF 'Sent for signature' status (voided-and-resent envelopes).",
+    )
+
 
 # ── Population filter (drives all averages) ────────────────────────────────────
 def apply_population_filters(
@@ -113,6 +120,7 @@ def apply_population_filters(
     rework: str,
     nsct: str,
     outcomes: list,
+    resend: str = "Include",
 ) -> pd.DataFrame:
     """Scope the quote population. Multi-order exclusion (pairs 13–15) is already
     baked into the pipeline, so no toggle is needed here."""
@@ -129,10 +137,12 @@ def apply_population_filters(
         mask &= ~df["nsct_flag"]
     if outcomes:
         mask &= df["outcome"].isin(outcomes)
+    if resend == "Exclude":
+        mask &= ~df["resend_suspected"]
     return df[mask].copy()
 
 
-pop = apply_population_filters(df, month, rework, nsct, outcomes)
+pop = apply_population_filters(df, month, rework, nsct, outcomes, resend)
 
 with st.sidebar:
     st.caption(f"**{len(pop):,}** / {len(df):,} quotes matched")
@@ -162,7 +172,7 @@ for i in range(15):
 # When "Reworked only": compute the clean-path comparison population
 clean_rows = None
 if rework == "Reworked only":
-    clean_pop = apply_population_filters(df, month, "Clean only", nsct, outcomes)
+    clean_pop = apply_population_filters(df, month, "Clean only", nsct, outcomes, resend)
     clean_rows = [pair_avg(clean_pop, src_prefix, i, factor)[0] for i in range(15)]
 
 
@@ -383,8 +393,106 @@ def render_quote_card(row: pd.Series):
         st.table(pd.DataFrame(timeline).set_index("#"))
 
 
+# ── Statistical analysis + resend opportunity ──────────────────────────────────
+def pair_stats(pop: pd.DataFrame, prefix: str, i: int, factor: float):
+    """Full per-step statistics + the scaled value series for the histogram."""
+    raw = pd.to_numeric(pop[f"{prefix}_{i + 1}"], errors="coerce").dropna() * factor
+    neg = int((raw < 0).sum())
+    vals = raw[raw >= 0]
+    if not len(vals):
+        return None
+    return {
+        "n": int(len(vals)),
+        "min": float(vals.min()), "max": float(vals.max()),
+        "mean": float(vals.mean()), "median": float(vals.median()),
+        "std": float(vals.std(ddof=0)),
+        "p90": float(vals.quantile(0.90)), "p95": float(vals.quantile(0.95)),
+        "neg": neg, "vals": vals.reset_index(drop=True),
+    }
+
+
+# Hover definitions for each statistic (shown on the table's column headers)
+_METRIC_HELP = {
+    "n":      "Number of quotes with a valid, non-negative duration for this step pair (after filters).",
+    "Min":    "Shortest observed duration.",
+    "Max":    "Longest observed duration — the outlier ceiling.",
+    "Mean":   "Arithmetic average. Pulled upward by a few very long durations (the tail).",
+    "Median": "Middle value: half the quotes are faster, half slower. Robust to outliers.",
+    "Std":    "Standard deviation — how spread out durations are around the mean.",
+    "p90":    "90th percentile: 90% of quotes finish this step within this time.",
+    "p95":    "95th percentile: 95% finish within this time — highlights the slow tail.",
+}
+
+
+def render_stats_table():
+    """One row per step pair; columns are the statistics, with hover help on headers."""
+    rows, total_neg = [], 0
+    for i in range(15):
+        s = pair_stats(pop, src_prefix, i, factor)
+        if s:
+            total_neg += s["neg"]
+            rows.append({"Step Pair": PAIR_LABELS[i], "n": s["n"], "Min": s["min"],
+                         "Max": s["max"], "Mean": s["mean"], "Median": s["median"],
+                         "Std": s["std"], "p90": s["p90"], "p95": s["p95"]})
+        else:
+            rows.append({"Step Pair": PAIR_LABELS[i], "n": 0, "Min": None, "Max": None,
+                         "Mean": None, "Median": None, "Std": None, "p90": None, "p95": None})
+    u = unit_suffix
+    cfg = {
+        "Step Pair": st.column_config.TextColumn("Step Pair", help="The transition between two process steps."),
+        "n":      st.column_config.NumberColumn("n", help=_METRIC_HELP["n"], format="%d"),
+        "Min":    st.column_config.NumberColumn(f"Min ({u})",    help=_METRIC_HELP["Min"],    format="%.1f"),
+        "Max":    st.column_config.NumberColumn(f"Max ({u})",    help=_METRIC_HELP["Max"],    format="%.1f"),
+        "Mean":   st.column_config.NumberColumn(f"Mean ({u})",   help=_METRIC_HELP["Mean"],   format="%.1f"),
+        "Median": st.column_config.NumberColumn(f"Median ({u})", help=_METRIC_HELP["Median"], format="%.1f"),
+        "Std":    st.column_config.NumberColumn(f"Std ({u})",    help=_METRIC_HELP["Std"],    format="%.1f"),
+        "p90":    st.column_config.NumberColumn(f"p90 ({u})",    help=_METRIC_HELP["p90"],    format="%.1f"),
+        "p95":    st.column_config.NumberColumn(f"p95 ({u})",    help=_METRIC_HELP["p95"],    format="%.1f"),
+    }
+    st.dataframe(pd.DataFrame(rows), column_config=cfg, hide_index=True, use_container_width=True)
+    if total_neg:
+        st.caption(f"⚠️ {total_neg} negative delta(s) across steps excluded (out-of-order timestamps).")
+
+
+def render_step_histogram(i: int):
+    """Distribution of one step pair's durations over the current population."""
+    s = pair_stats(pop, src_prefix, i, factor)
+    if not s:
+        st.info("No data for this step pair under the current filters.")
+        return
+    hdf = pd.DataFrame({"Duration": s["vals"]})
+    hist = alt.Chart(hdf).mark_bar(opacity=0.85, cornerRadius=2).encode(
+        x=alt.X("Duration:Q", bin=alt.Bin(maxbins=30), title=f"Duration ({unit_label})"),
+        y=alt.Y("count():Q", title="Quotes"),
+        tooltip=[alt.Tooltip("count():Q", title="Quotes")],
+    )
+    rdf = pd.DataFrame([{"v": s["median"], "l": "median"},
+                        {"v": s["p90"], "l": "p90"}, {"v": s["p95"], "l": "p95"}])
+    rules = alt.Chart(rdf).mark_rule(color="#dc2626", strokeDash=[4, 3]).encode(
+        x="v:Q", tooltip=[alt.Tooltip("l:N", title="stat"), alt.Tooltip("v:Q", format=".1f")])
+    st.altair_chart((hist + rules).properties(height=320), use_container_width=True)
+    st.caption("Dashed red lines mark the median, p90 and p95.")
+
+
+def render_resend_opportunity():
+    """Flag voided/resent DocuSign envelopes as a speed-up opportunity."""
+    n_flag = int(df["resend_suspected"].sum())
+    if n_flag == 0:
+        return
+    n_sent = int(df["docusign_sent_1"].notna().sum())
+    gaps = pd.to_numeric(df.loc[df["resend_suspected"], "resend_gap_days"], errors="coerce").dropna()
+    st.warning(
+        f"**Resend opportunity — {n_flag} quotes ({n_flag / max(n_sent, 1) * 100:.0f}% of DocuSign-sent) "
+        f"show a voided/resent envelope.** The envelope was actually sent a median of "
+        f"**{gaps.median():.1f} days** (up to {gaps.max():.0f}) after the quote was marked "
+        f"'Sent for signature' — a total of **{gaps.sum():.0f} days** of avoidable delay. "
+        f"Use the sidebar **Resend-suspected → Exclude** toggle to see clean-process metrics."
+    )
+
+
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_a, tab_b = st.tabs(["📊 Aggregate Velocity", "🔍 Per-Quote Timeline"])
+tab_a, tab_b, tab_c = st.tabs(
+    ["📊 Velocity", "🔍 Per-Quote Timeline", "📈 Statistical Analysis"])
 
 with tab_a:
     if rework == "Reworked only":
@@ -426,12 +534,39 @@ with tab_b:
     elif qnum_input or opp_input:
         st.info("No matching quotes found.")
 
+with tab_c:
+    render_resend_opportunity()
+
+    st.subheader("Statistical Analysis — All Step Pairs")
+    st.caption(f"Values in **{unit_label}**. Hover any column header for its definition. "
+               "Respects the sidebar filters (including Resend-suspected).")
+    render_stats_table()
+
+    st.subheader("Distribution by Step Pair")
+    sel_label = st.selectbox("Filter by step pair", PAIR_LABELS, index=8)
+    render_step_histogram(PAIR_LABELS.index(sel_label))
+
 # ── Download ──────────────────────────────────────────────────────────────────
 st.divider()
+col_dl1, col_dl2 = st.columns(2)
+
 html_snap = build_standalone_html(df)
-st.download_button(
-    "⬇️ Download Local Interactive Dasboard",
+col_dl1.download_button(
+    "⬇️ Download Local Interactive Dashboard",
     data=html_snap,
     file_name="o2c_velocity_dashboard.html",
     mime="text/html",
+)
+
+_resend_log = (
+    df[df["resend_suspected"]][
+        ["quote_number", "opportunity_id", "quote_type", "s09", "s10",
+         "docusign_sent_1", "resend_gap_days"]
+    ].rename(columns={"s09": "accepted", "s10": "mcf_sent", "docusign_sent_1": "docusign_sent"})
+)
+col_dl2.download_button(
+    f"⬇️ Resend-suspected log ({len(_resend_log)} quotes, CSV)",
+    data=_resend_log.to_csv(index=False),
+    file_name="resend_suspected_log.csv",
+    mime="text/csv",
 )
