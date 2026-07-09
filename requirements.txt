@@ -1,5 +1,6 @@
-streamlit
+streamlit>=1.35
 pandas
+altair
 openpyxl
 holidays
 numpy
