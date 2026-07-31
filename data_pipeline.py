@@ -653,7 +653,7 @@ const OBJECT_PAIRS={all:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14],quote:[0,1,2,3,4,5,
 const OBJ_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
 const STEP_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
 
-const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all',object:'all',dataView:'table',resend:'all',region:'all',statPair:8};
+const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all',object:'all',dataView:'table',resend:'all',region:'all',statPair:8,velocityView:'all'};
 const HAS_REGION=QUOTES.some(q=>q.sales_region&&q.sales_region!=='Unassigned');
 
 function avg(arr){const v=arr.filter(x=>x!==null&&!isNaN(x));return v.length?v.reduce((a,b)=>a+b,0)/v.length:null;}
@@ -904,6 +904,12 @@ function setDataView(v){
   document.getElementById('dv-table').classList.toggle('active',v==='table');
   document.getElementById('dv-chart').classList.toggle('active',v==='chart');
 }
+function setVelocityView(v){
+  state.velocityView=v;
+  document.getElementById('vv-all').classList.toggle('active',v==='all');
+  document.getElementById('vv-region').classList.toggle('active',v==='region');
+  renderViewA();
+}
 
 function renderViewA(){
   const filtered=applyFilters(QUOTES);
@@ -933,17 +939,44 @@ function renderViewA(){
       callout.classList.remove('hidden');
     }
   }else{callout.classList.add('hidden');}
-  const xhdr=isRework?'<th class="r">vs. Clean Path</th>':'';
-  let html=`<table class="vtbl"><thead><tr><th>Step Pair</th><th class="r">Avg (${un})</th><th class="r">Median</th><th class="r">n</th>${xhdr}</tr></thead><tbody>`;
-  rows.forEach(r=>{
-    const warn=r.pairIdx===14?' <span title="Manually set; may lag actual install date">⚠️</span>':'';
-    const xtd=isRework?(r.delta===null?'<td class="muted">—</td>':r.delta>0?`<td class="rwd">+${fmt(r.delta)}${u}</td>`:`<td class="rwd better">${fmt(r.delta)}${u}</td>`):'';
-    html+=`<tr><td class="pair">${escHtml(r.lbl)}${warn}</td><td class="${r.a===null?'muted':'num'}">${fmt(r.a)}</td><td class="${r.md===null?'muted':'num'}">${fmt(r.md)}</td><td class="num">${r.n}</td>${xtd}</tr>`;
-  });
-  html+='</tbody></table>';
+  let html;
+  if(HAS_REGION&&state.velocityView==='region'){
+    html=renderVelocityByRegion(filtered,rows,u);
+  }else{
+    const xhdr=isRework?'<th class="r">vs. Clean Path</th>':'';
+    html=`<table class="vtbl"><thead><tr><th>Step Pair</th><th class="r">Avg (${un})</th><th class="r">Median</th><th class="r">n</th>${xhdr}</tr></thead><tbody>`;
+    rows.forEach(r=>{
+      const warn=r.pairIdx===14?' <span title="Manually set; may lag actual install date">⚠️</span>':'';
+      const xtd=isRework?(r.delta===null?'<td class="muted">—</td>':r.delta>0?`<td class="rwd">+${fmt(r.delta)}${u}</td>`:`<td class="rwd better">${fmt(r.delta)}${u}</td>`):'';
+      html+=`<tr><td class="pair">${escHtml(r.lbl)}${warn}</td><td class="${r.a===null?'muted':'num'}">${fmt(r.a)}</td><td class="${r.md===null?'muted':'num'}">${fmt(r.md)}</td><td class="num">${r.n}</td>${xtd}</tr>`;
+    });
+    html+='</tbody></table>';
+  }
   document.getElementById('tbl-a').innerHTML=html;
   renderCharts(allRows,unitSuffix());   // always full 15 pairs, regardless of object filter
   renderSummary(filtered);
+}
+
+/* Step-pair table pivoted by Sales Region: one column per region, cell =
+   "median (n=…)". Column headers stay static (region name only) — n varies
+   row-to-row since not every quote reaches every step, so embedding n in the
+   header would fragment the table into one column per distinct n value. */
+function renderVelocityByRegion(filtered,rows,u){
+  const regions=[...new Set(filtered.map(q=>q.sales_region).filter(Boolean))].sort();
+  let html='<table class="vtbl"><thead><tr><th>Step Pair</th>'
+    +regions.map(r=>'<th class="r">'+escHtml(r)+'</th>').join('')+'</tr></thead><tbody>';
+  rows.forEach(r=>{
+    const warn=r.pairIdx===14?' <span title="Manually set; may lag actual install date">⚠️</span>':'';
+    html+='<tr><td class="pair">'+escHtml(r.lbl)+warn+'</td>';
+    regions.forEach(region=>{
+      const sub=filtered.filter(q=>q.sales_region===region);
+      const s=pairStats(sub,r.pairIdx);
+      html+='<td class="'+(s?'num':'muted')+'">'+(s?fmt(s.median)+u+' (n='+s.n+')':'—')+'</td>';
+    });
+    html+='</tr>';
+  });
+  html+='</tbody></table>';
+  return html;
 }
 
 /* ── View C: Statistical Analysis (resend callout + stats table + histogram) ── */
@@ -1064,6 +1097,7 @@ function buildCard(q){
     cont.appendChild(btn);
   });
   const regionSection=document.getElementById('sb-region-section');
+  const velocityToggle=document.getElementById('velocity-view-toggle');
   if(HAS_REGION){
     const regions=[...new Set(QUOTES.map(q=>q.sales_region).filter(Boolean))].sort();
     const rcont=document.getElementById('chips-region');
@@ -1073,7 +1107,10 @@ function buildCard(q){
       btn.onclick=function(){setFilter('region',this);};
       rcont.appendChild(btn);
     });
-  }else if(regionSection){regionSection.classList.add('hidden');}
+    if(velocityToggle)velocityToggle.classList.remove('hidden');
+  }else{
+    if(regionSection)regionSection.classList.add('hidden');
+  }
   const sel=document.getElementById('stat-sel');
   PAIR_LABELS.forEach((lbl,i)=>{const o=document.createElement('option');o.value=i;o.textContent=lbl;if(i===state.statPair)o.selected=true;sel.appendChild(o);});
 })();
@@ -1167,6 +1204,10 @@ renderViewC();
         '      </div>\n'
         '      <div id="view-a">\n'
         '        <div id="callout-rework" class="callout hidden"></div>\n'
+        '        <div class="dv-toggle hidden" id="velocity-view-toggle">\n'
+        "          <button id=\"vv-all\"    class=\"dv-btn active\" onclick=\"setVelocityView('all')\">All</button>\n"
+        "          <button id=\"vv-region\" class=\"dv-btn\"        onclick=\"setVelocityView('region')\">By Sales Region</button>\n"
+        '        </div>\n'
         '        <div class="dv-toggle">\n'
         "          <button id=\"dv-table\" class=\"dv-btn active\" onclick=\"setDataView('table')\">&#9638; Table</button>\n"
         "          <button id=\"dv-chart\" class=\"dv-btn\"        onclick=\"setDataView('chart')\">&#128202; Chart</button>\n"
