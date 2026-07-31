@@ -112,6 +112,18 @@ with st.sidebar:
              "the MCF 'Sent for signature' status (voided-and-resent envelopes).",
     )
 
+    # Sales Region is only present on newer extracts (Quote History carries
+    # "Quote : Account : Account Owner : Department"). Hide the filter entirely
+    # when the column is absent or every quote is "Unassigned" (older files).
+    HAS_REGION = "sales_region" in df.columns and (df["sales_region"] != "Unassigned").any()
+    regions = []
+    if HAS_REGION:
+        regions = st.multiselect(
+            "Sales Region",
+            sorted(df["sales_region"].unique()),
+            default=[],
+        )
+
 
 # ── Population filter (drives all averages) ────────────────────────────────────
 def apply_population_filters(
@@ -121,6 +133,7 @@ def apply_population_filters(
     nsct: str,
     outcomes: list,
     resend: str = "Include",
+    regions: list = None,
 ) -> pd.DataFrame:
     """Scope the quote population. Multi-order exclusion (pairs 13–15) is already
     baked into the pipeline, so no toggle is needed here."""
@@ -139,10 +152,12 @@ def apply_population_filters(
         mask &= df["outcome"].isin(outcomes)
     if resend == "Exclude":
         mask &= ~df["resend_suspected"]
+    if regions:
+        mask &= df["sales_region"].isin(regions)
     return df[mask].copy()
 
 
-pop = apply_population_filters(df, month, rework, nsct, outcomes, resend)
+pop = apply_population_filters(df, month, rework, nsct, outcomes, resend, regions)
 
 with st.sidebar:
     st.caption(f"**{len(pop):,}** / {len(df):,} quotes matched")
@@ -172,7 +187,7 @@ for i in range(15):
 # When "Reworked only": compute the clean-path comparison population
 clean_rows = None
 if rework == "Reworked only":
-    clean_pop = apply_population_filters(df, month, "Clean only", nsct, outcomes, resend)
+    clean_pop = apply_population_filters(df, month, "Clean only", nsct, outcomes, resend, regions)
     clean_rows = [pair_avg(clean_pop, src_prefix, i, factor)[0] for i in range(15)]
 
 
@@ -199,6 +214,29 @@ def render_step_pair_table(vis_idx: list):
             )
         table.append(row)
     st.dataframe(pd.DataFrame(table), use_container_width=True, hide_index=True)
+
+
+def render_step_pair_table_by_region(vis_idx: list):
+    """Step-pair table pivoted by Sales Region: one Median column per region,
+    rows = step pairs. Respects the active Sales Region filter (only regions
+    present in `pop` appear as columns) and every other sidebar filter.
+
+    Column headers are the plain region names (n varies row-to-row since not
+    every quote reaches every step, so n is embedded in each cell instead —
+    keeping n in the header would fragment the table into one column per
+    distinct n value)."""
+    region_list = sorted(pop["sales_region"].unique())
+    table = []
+    for i in vis_idx:
+        warn = " ⚠️" if i == 14 else ""
+        row = {"Step Pair": f"{PAIR_LABELS[i]}{warn}"}
+        for region in region_list:
+            sub = pop[pop["sales_region"] == region]
+            _, md, n = pair_avg(sub, src_prefix, i, factor)
+            row[region] = f"{fmt(md)} (n={n})" if n else "—"
+        table.append(row)
+    st.dataframe(pd.DataFrame(table), use_container_width=True, hide_index=True)
+    st.caption(f"Median ({unit_label}) per Sales Region, with n in parentheses.")
 
 
 def render_rework_callout():
@@ -474,6 +512,36 @@ def render_step_histogram(i: int):
     st.caption("Dashed red lines mark the median, p90 and p95.")
 
 
+def render_region_breakdown(i: int):
+    """Median/mean/n for one step pair, broken down by Sales Region."""
+    if not HAS_REGION:
+        return
+    rows = []
+    for region in sorted(pop["sales_region"].unique()):
+        sub = pop[pop["sales_region"] == region]
+        s = pair_stats(sub, src_prefix, i, factor)
+        rows.append({
+            "Sales Region": region,
+            "n": s["n"] if s else 0,
+            f"Median ({unit_label})": fmt(s["median"]) if s else "—",
+            f"Mean ({unit_label})":   fmt(s["mean"]) if s else "—",
+        })
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    chart_df = pd.DataFrame([
+        {"Sales Region": r["Sales Region"], "Median": None if r[f"Median ({unit_label})"] == "—"
+         else float(r[f"Median ({unit_label})"])}
+        for r in rows
+    ]).dropna(subset=["Median"])
+    if len(chart_df):
+        bars = alt.Chart(chart_df).mark_bar(opacity=0.85, cornerRadius=3, color="#059669").encode(
+            x=alt.X("Sales Region:N", sort="-y", title=None),
+            y=alt.Y("Median:Q", title=f"Median ({unit_label})"),
+            tooltip=["Sales Region:N", alt.Tooltip("Median:Q", format=".1f")],
+        )
+        st.altair_chart(bars.properties(height=280), use_container_width=True)
+
+
 def render_resend_opportunity():
     """Flag voided/resent DocuSign envelopes as a speed-up opportunity."""
     n_flag = int(df["resend_suspected"].sum())
@@ -501,7 +569,16 @@ with tab_a:
     st.subheader("Step-Pair Velocity")
     if obj != "All":
         st.caption(f"Table scoped to **{obj}** steps. Charts and summary always reflect the full pipeline.")
-    render_step_pair_table(OBJECT_PAIRS[obj])
+
+    velocity_view = "All"
+    if HAS_REGION:
+        velocity_view = st.radio(
+            "View", ["All", "By Sales Region"], horizontal=True, key="velocity_view_mode"
+        )
+    if velocity_view == "By Sales Region":
+        render_step_pair_table_by_region(OBJECT_PAIRS[obj])
+    else:
+        render_step_pair_table(OBJECT_PAIRS[obj])
     st.caption("⚠️ Step 15→16 (Deployment Closed) is manually set and may lag actual install date.")
 
     st.subheader(f"Avg Time per Step Pair — {unit_label}")
@@ -544,7 +621,13 @@ with tab_c:
 
     st.subheader("Distribution by Step Pair")
     sel_label = st.selectbox("Filter by step pair", PAIR_LABELS, index=8)
-    render_step_histogram(PAIR_LABELS.index(sel_label))
+    sel_idx = PAIR_LABELS.index(sel_label)
+    render_step_histogram(sel_idx)
+
+    if HAS_REGION:
+        st.subheader(f"By Sales Region — {sel_label}")
+        st.caption("Median/mean/n for the step pair selected above, broken down by Sales Region.")
+        render_region_breakdown(sel_idx)
 
 # ── Download ──────────────────────────────────────────────────────────────────
 st.divider()

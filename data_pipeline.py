@@ -83,6 +83,8 @@ def _load_quote_history(xls: pd.ExcelFile) -> pd.DataFrame:
         "Quote : Quote Name":     "quote_name",
         "Quote : Opportunity ID": "opportunity_id",
         "Quote : Quote Type":     "quote_type",
+        "Quote : Account ID":     "account_id",
+        "Quote : Account : Account Owner : Department": "sales_region",
         "Changed Field":          "field",
         "New Value":              "new_value",
         "Created Date":           "created_date",
@@ -204,13 +206,21 @@ def _extract_quote_events(qh: pd.DataFrame) -> pd.DataFrame:
     )
     qt = qt.merge(opp_map.reset_index(), on="quote_id", how="left")
 
-    # Quote metadata (number, name, type)
+    # Quote metadata (number, name, type, account, sales region)
+    _meta_cols = [c for c in ("quote_number", "quote_name", "quote_type",
+                               "account_id", "sales_region") if c in qh.columns]
     meta = (
-        qh.groupby("quote_id", sort=False)[["quote_number", "quote_name", "quote_type"]]
+        qh.groupby("quote_id", sort=False)[_meta_cols]
         .first()
         .reset_index()
     )
     qt = qt.merge(meta, on="quote_id", how="left")
+    if "sales_region" not in qt.columns:
+        qt["sales_region"] = None
+    qt["sales_region"] = qt["sales_region"].fillna("Unassigned")
+    qt.loc[qt["sales_region"].astype(str).str.strip() == "", "sales_region"] = "Unassigned"
+    if "account_id" not in qt.columns:
+        qt["account_id"] = None
 
     # s10 "Signature Sent" — sourced from the Quote's MCF signature status
     # ("Sent for signature"), not DocuSign Date Sent. This captures the original
@@ -515,6 +525,7 @@ def _serialize_quotes(df: pd.DataFrame) -> str:
             "resend_gap_days":  (None if pd.isna(row.get("resend_gap_days"))
                                  else float(row.get("resend_gap_days"))),
             "has_ds_sent":      bool(pd.notna(row.get("docusign_sent_1"))),
+            "sales_region":     str(row.get("sales_region", "Unassigned")),
             "timestamps":       timestamps,
             # cal: calendar hours — JS divides by 24 for days, uses as-is for hours
             "cal":              cal_h,
@@ -642,7 +653,8 @@ const OBJECT_PAIRS={all:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14],quote:[0,1,2,3,4,5,
 const OBJ_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
 const STEP_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
 
-const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all',object:'all',dataView:'table',resend:'all',statPair:8};
+const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all',object:'all',dataView:'table',resend:'all',region:'all',statPair:8};
+const HAS_REGION=QUOTES.some(q=>q.sales_region&&q.sales_region!=='Unassigned');
 
 function avg(arr){const v=arr.filter(x=>x!==null&&!isNaN(x));return v.length?v.reduce((a,b)=>a+b,0)/v.length:null;}
 function med(arr){const v=[...arr.filter(x=>x!==null&&!isNaN(x))].sort((a,b)=>a-b);if(!v.length)return null;const m=Math.floor(v.length/2);return v.length%2?v[m]:(v[m-1]+v[m])/2;}
@@ -856,6 +868,7 @@ function applyFilters(qs,s){
     if(s.outcome!=='all'&&q.outcome!==s.outcome)return false;
     if(s.month&&s.month!=='all'&&tsMonth(q.timestamps[0])!==s.month)return false;
     if(s.resend==='exclude'&&q.resend_suspected)return false;
+    if(s.region&&s.region!=='all'&&q.sales_region!==s.region)return false;
     return true;
   });
 }
@@ -883,7 +896,7 @@ function setFilter(key,btn){
   grp.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
   btn.classList.add('on');state[key]=btn.dataset.v;renderViewA();renderViewC();
 }
-function setStatPair(v){state.statPair=+v;renderStatHist(applyFilters(QUOTES),state.statPair);}
+function setStatPair(v){state.statPair=+v;const f=applyFilters(QUOTES);renderStatHist(f,state.statPair);renderRegionBreakdown(f);}
 function setDataView(v){
   state.dataView=v;
   document.getElementById('tbl-a').classList.toggle('hidden',v!=='table');
@@ -988,6 +1001,27 @@ function renderViewC(){
   h+='</tbody></table>';
   document.getElementById('stats-c').innerHTML=h;
   renderStatHist(filtered,state.statPair);
+  renderRegionBreakdown(filtered);
+}
+
+function renderRegionBreakdown(filtered){
+  const el=document.getElementById('region-breakdown');
+  const card=document.getElementById('region-breakdown-card');
+  if(!el||!card)return;
+  if(!HAS_REGION){card.classList.add('hidden');return;}
+  card.classList.remove('hidden');
+  const i=state.statPair,u=unitSuffix();
+  const regions=[...new Set(filtered.map(q=>q.sales_region).filter(Boolean))].sort();
+  let h='<table class="vtbl"><thead><tr><th>Sales Region</th><th class="r">n</th>'
+    +'<th class="r">Median ('+u+')</th><th class="r">Mean ('+u+')</th></tr></thead><tbody>';
+  regions.forEach(rg=>{
+    const sub=filtered.filter(q=>q.sales_region===rg);
+    const s=pairStats(sub,i);
+    if(s){h+='<tr><td class="pair">'+escHtml(rg)+'</td><td class="num">'+s.n+'</td><td class="num">'+fmt(s.median)+'</td><td class="num">'+fmt(s.mean)+'</td></tr>';}
+    else{h+='<tr><td class="pair">'+escHtml(rg)+'</td><td class="num">0</td><td class="muted">—</td><td class="muted">—</td></tr>';}
+  });
+  h+='</tbody></table>';
+  el.innerHTML=h;
 }
 
 function doSearch(){const v=document.getElementById('si').value.trim();renderViewB(v);}
@@ -1029,6 +1063,17 @@ function buildCard(q){
     btn.onclick=function(){setFilter('month',this);};
     cont.appendChild(btn);
   });
+  const regionSection=document.getElementById('sb-region-section');
+  if(HAS_REGION){
+    const regions=[...new Set(QUOTES.map(q=>q.sales_region).filter(Boolean))].sort();
+    const rcont=document.getElementById('chips-region');
+    regions.forEach(rg=>{
+      const btn=document.createElement('button');
+      btn.className='chip';btn.dataset.v=rg;btn.textContent=rg;
+      btn.onclick=function(){setFilter('region',this);};
+      rcont.appendChild(btn);
+    });
+  }else if(regionSection){regionSection.classList.add('hidden');}
   const sel=document.getElementById('stat-sel');
   PAIR_LABELS.forEach((lbl,i)=>{const o=document.createElement('option');o.value=i;o.textContent=lbl;if(i===state.statPair)o.selected=true;sel.appendChild(o);});
 })();
@@ -1106,6 +1151,12 @@ renderViewC();
         '          <button class="chip"    data-v="exclude" onclick="setFilter(\'resend\',this)">Exclude</button>\n'
         '        </div>\n'
         '      </div>\n'
+        '      <div class="sb-section" id="sb-region-section">\n'
+        '        <span class="sb-lbl">Sales Region</span>\n'
+        '        <div class="sb-chips" id="chips-region">\n'
+        '          <button class="chip on" data-v="all" onclick="setFilter(\'region\',this)">All</button>\n'
+        '        </div>\n'
+        '      </div>\n'
         '    </div>\n'
         # ── Main content ──────────────────────────────────────────────────────
         '    <div class="main">\n'
@@ -1140,6 +1191,10 @@ renderViewC();
         '            <select id="stat-sel" class="stat-select" onchange="setStatPair(this.value)"></select>\n'
         '            <div id="stat-hist"></div>\n'
         '          </div>\n'
+        '        </div>\n'
+        '        <div class="chart-card hidden" id="region-breakdown-card">\n'
+        '          <div class="chart-hdr">By Sales Region (selected step pair above)</div>\n'
+        '          <div class="chart-body"><div class="tbl-wrap" id="region-breakdown"></div></div>\n'
         '        </div>\n'
         '      </div>\n'
         '    </div>\n'
