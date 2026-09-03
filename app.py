@@ -95,7 +95,7 @@ with st.sidebar:
     obj = st.radio("Object", list(OBJECT_PAIRS.keys()))
 
     month_vals = sorted(df["s01"].dropna().dt.strftime("%Y-%m").unique().tolist())
-    month = st.selectbox("Month", ["All"] + month_vals, format_func=month_label)
+    months = st.multiselect("Month", month_vals, default=[], format_func=month_label)
 
     rework   = st.radio("Rework", ["All", "Reworked only", "Clean only"])
     nsct     = st.radio("NSCT Review", ["All", "With NSCT", "Without NSCT"])
@@ -128,7 +128,7 @@ with st.sidebar:
 # ── Population filter (drives all averages) ────────────────────────────────────
 def apply_population_filters(
     df: pd.DataFrame,
-    month: str,
+    months: list,
     rework: str,
     nsct: str,
     outcomes: list,
@@ -138,8 +138,8 @@ def apply_population_filters(
     """Scope the quote population. Multi-order exclusion (pairs 13–15) is already
     baked into the pipeline, so no toggle is needed here."""
     mask = pd.Series(True, index=df.index)
-    if month != "All":
-        mask &= df["s01"].dt.strftime("%Y-%m") == month
+    if months:
+        mask &= df["s01"].dt.strftime("%Y-%m").isin(months)
     if rework == "Reworked only":
         mask &= df["rework_flag"]
     elif rework == "Clean only":
@@ -157,7 +157,7 @@ def apply_population_filters(
     return df[mask].copy()
 
 
-pop = apply_population_filters(df, month, rework, nsct, outcomes, resend, regions)
+pop = apply_population_filters(df, months, rework, nsct, outcomes, resend, regions)
 
 with st.sidebar:
     st.caption(f"**{len(pop):,}** / {len(df):,} quotes matched")
@@ -187,7 +187,7 @@ for i in range(15):
 # When "Reworked only": compute the clean-path comparison population
 clean_rows = None
 if rework == "Reworked only":
-    clean_pop = apply_population_filters(df, month, "Clean only", nsct, outcomes, resend, regions)
+    clean_pop = apply_population_filters(df, months, "Clean only", nsct, outcomes, resend, regions)
     clean_rows = [pair_avg(clean_pop, src_prefix, i, factor)[0] for i in range(15)]
 
 
