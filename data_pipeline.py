@@ -152,6 +152,13 @@ def _load_contract_history(xls: pd.ExcelFile) -> pd.DataFrame:
 
 def _load_docusign(xls: pd.ExcelFile) -> pd.DataFrame:
     df = xls.parse("Docusign Status Report")
+    # The XL-Connector query emits the relationship path as the header
+    # (e.g. "dsfs__Parent_Status_Record__r : dsfs__Contract__r : Contract Number");
+    # the original Salesforce report export used plain "Contract Number".
+    df.columns = [
+        "Contract Number" if isinstance(c, str) and c.strip().endswith("Contract Number") else c
+        for c in df.columns
+    ]
     rename = {
         "Contract Number":        "contract_number",
         "DocuSign Routing Order": "routing_order",
