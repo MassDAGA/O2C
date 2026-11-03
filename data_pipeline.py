@@ -675,7 +675,7 @@ const OBJECT_PAIRS={all:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14],quote:[0,1,2,3,4,5,
 const OBJ_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
 const STEP_COLORS=['#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#3b82f6','#7c3aed','#7c3aed','#7c3aed','#0891b2','#059669','#059669','#059669'];
 
-const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:'all',object:'all',dataView:'table',resend:'all',region:'all',statPair:8,velocityView:'all'};
+const state={mode:'cal',unit:'days',rework:'all',nsct:'all',outcome:'all',month:[],object:'all',dataView:'table',resend:'all',region:'all',statPair:8,velocityView:'all'};
 const HAS_REGION=QUOTES.some(q=>q.sales_region&&q.sales_region!=='Unassigned');
 
 function avg(arr){const v=arr.filter(x=>x!==null&&!isNaN(x));return v.length?v.reduce((a,b)=>a+b,0)/v.length:null;}
@@ -888,7 +888,7 @@ function applyFilters(qs,s){
     if(s.nsct==='nsct'&&!q.nsct_flag)return false;
     if(s.nsct==='non_nsct'&&q.nsct_flag)return false;
     if(s.outcome!=='all'&&q.outcome!==s.outcome)return false;
-    if(s.month&&s.month!=='all'&&tsMonth(q.timestamps[0])!==s.month)return false;
+    if(s.month&&s.month.length&&!s.month.includes(tsMonth(q.timestamps[0])))return false;
     if(s.resend==='exclude'&&q.resend_suspected)return false;
     if(s.region&&s.region!=='all'&&q.sales_region!==s.region)return false;
     return true;
@@ -917,6 +917,24 @@ function setFilter(key,btn){
   const grp=btn.closest('.sb-chips,.chips');
   grp.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
   btn.classList.add('on');state[key]=btn.dataset.v;renderViewA();renderViewC();
+}
+/* Month supports multi-select (unlike the other single-select chip groups):
+   "All" clears the selection, individual months toggle on/off, and an empty
+   selection falls back to "All" — same convention as the Streamlit app. */
+function toggleMonthFilter(btn){
+  const grp=btn.closest('.sb-chips,.chips');
+  const allBtn=grp.querySelector('[data-v="all"]');
+  if(btn.dataset.v==='all'){
+    grp.querySelectorAll('.chip').forEach(c=>c.classList.remove('on'));
+    btn.classList.add('on');
+    state.month=[];
+  }else{
+    btn.classList.toggle('on');
+    if(allBtn)allBtn.classList.remove('on');
+    state.month=[...grp.querySelectorAll('.chip.on')].map(c=>c.dataset.v).filter(v=>v!=='all');
+    if(!state.month.length&&allBtn)allBtn.classList.add('on');
+  }
+  renderViewA();renderViewC();
 }
 function setStatPair(v){state.statPair=+v;const f=applyFilters(QUOTES);renderStatHist(f,state.statPair);renderRegionBreakdown(f);}
 function setDataView(v){
@@ -1115,7 +1133,7 @@ function buildCard(q){
   months.forEach(ym=>{
     const btn=document.createElement('button');
     btn.className='chip';btn.dataset.v=ym;btn.textContent=monthLabel(ym);
-    btn.onclick=function(){setFilter('month',this);};
+    btn.onclick=function(){toggleMonthFilter(this);};
     cont.appendChild(btn);
   });
   const regionSection=document.getElementById('sb-region-section');
@@ -1174,7 +1192,7 @@ renderViewC();
         '      <div class="sb-section">\n'
         '        <span class="sb-lbl">Month</span>\n'
         '        <div class="sb-chips" id="chips-month">\n'
-        '          <button class="chip on" data-v="all" onclick="setFilter(\'month\',this)">All</button>\n'
+        '          <button class="chip on" data-v="all" onclick="toggleMonthFilter(this)">All</button>\n'
         '        </div>\n'
         '      </div>\n'
         '      <div class="sb-section">\n'
