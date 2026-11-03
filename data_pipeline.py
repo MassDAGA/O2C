@@ -150,15 +150,37 @@ def _load_contract_history(xls: pd.ExcelFile) -> pd.DataFrame:
     return df
 
 
+# Where each DocuSign field can come from in the "Docusign Status Report" tab.
+# target: (suffix of the raw XL-Connector/API header, original report header).
+# Headers are compared with whitespace stripped and lower-cased.
+_DOCUSIGN_COLS = {
+    "contract_number": ("contractnumber",    "contractnumber"),
+    "routing_order":   ("routing_order__c",  "docusignroutingorder"),
+    "date_sent":       ("date_sent__c",      "datesent"),
+    "date_signed":     ("date_signed__c",    "datesigned"),
+}
+
+
 def _load_docusign(xls: pd.ExcelFile) -> pd.DataFrame:
     df = xls.parse("Docusign Status Report")
-    rename = {
-        "Contract Number":        "contract_number",
-        "DocuSign Routing Order": "routing_order",
-        "Date Sent":              "date_sent",
-        "Date Signed":            "date_signed",
-    }
-    df = df.rename(columns=rename)[[c for c in rename.values() if c in df.rename(columns=rename).columns]]
+    # The tab is fed by an XL-Connector query whose headers are raw API names
+    # (e.g. "dsfs__Date_Sent__c", or a relationship path ending in "ContractNumber"
+    # for the contract). The original Salesforce report export used plain headers
+    # ("Date Sent", ...). Prefer the raw query columns when both are present so
+    # report-style helper columns beside them can't override the query output.
+    norm = {c: re.sub(r"\s+", "", str(c)).lower() for c in df.columns}
+    picked = {}
+    for target, (raw_suffix, plain) in _DOCUSIGN_COLS.items():
+        raw = [c for c, n in norm.items() if n.startswith("dsfs__") and n.endswith(raw_suffix)]
+        friendly = [c for c, n in norm.items() if n == plain]
+        found = raw or friendly
+        if not found:
+            raise ValueError(
+                f"'Docusign Status Report' tab has no column for {target!r}. "
+                f"Columns found: {[str(c) for c in df.columns]}"
+            )
+        picked[found[0]] = target
+    df = df[list(picked)].rename(columns=picked)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         df["date_sent"]   = pd.to_datetime(df["date_sent"],   format="mixed", errors="coerce")
